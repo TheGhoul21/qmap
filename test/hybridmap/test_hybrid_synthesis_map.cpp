@@ -79,10 +79,20 @@ TEST_P(TestParametrizedHybridSynthesisMapper, EvaluateSynthesisStep) {
   EXPECT_GE(best[1], 0);
 }
 
-INSTANTIATE_TEST_SUITE_P(HybridSynthesisMapperTestSuite,
-                         TestParametrizedHybridSynthesisMapper,
-                         ::testing::Values("rubidium_gate", "rubidium_hybrid",
-                                           "rubidium_shuttling"));
+INSTANTIATE_TEST_SUITE_P(
+    HybridSynthesisMapperTestSuite, TestParametrizedHybridSynthesisMapper,
+    ::testing::Values(TestParams{"rubidium", false, false},
+                      TestParams{"rubidium", true, false},
+                      TestParams{"rubidium", false, true},
+                      TestParams{"rubidium", true, true},
+                      TestParams{"rubidium_hybrid", false, false},
+                      TestParams{"rubidium_hybrid", true, false},
+                      TestParams{"rubidium_hybrid", false, true},
+                      TestParams{"rubidium_hybrid", true, true},
+                      TestParams{"rubidium_shuttling", false, false},
+                      TestParams{"rubidium_shuttling", true, false},
+                      TestParams{"rubidium_shuttling", false, true},
+                      TestParams{"rubidium_shuttling", true, true}));
 
 class TestHybridSynthesisMapper : public testing::Test {
 protected:
