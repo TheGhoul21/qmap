@@ -228,10 +228,10 @@ PYBIND11_MODULE(MQT_QMAP_MODULE_NAME, m, py::mod_gil_not_used()) {
       "Neutral Atom Mapper that can evaluate different synthesis steps "
       "to choose the best one.")
       .def(py::init<const na::NeutralAtomArchitecture&,
-                    const na::MapperParameters&>(),
+                    const na::MapperParameters&, uint32_t>(),
            "Create Hybrid Synthesis Mapper with mapper parameters.",
            py::keep_alive<1, 2>(), py::keep_alive<1, 3>(), "arch"_a,
-           "params"_a = na::MapperParameters())
+           "params"_a = na::MapperParameters(), "buffer_size"_a = 0)
       .def("set_parameters", &na::HybridSynthesisMapper::setParameters,
            "Set the parameters for the Hybrid Synthesis Mapper.", "params"_a,
            py::keep_alive<1, 2>())
@@ -301,8 +301,10 @@ PYBIND11_MODULE(MQT_QMAP_MODULE_NAME, m, py::mod_gil_not_used()) {
           "Evaluates the synthesis steps proposed by the ZX extraction. "
           "Returns a list of fidelities of the mapped synthesis steps.",
           "synthesis_steps"_a, "complete_remap"_a = false, "also_map"_a = false)
-      .def("complete_remap", &na::HybridSynthesisMapper::completeRemap,
-           "Remaps the synthesized QuantumComputation to the hardware.")
+      .def(
+          "complete_remap",
+          [](na::HybridSynthesisMapper& mapper) { mapper.completeRemap(true); },
+          "Remaps the QuantumComputation to the hardware.")
       .def(
           "schedule",
           [](na::HybridSynthesisMapper& mapper, const bool verbose,

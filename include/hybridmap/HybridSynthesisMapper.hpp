@@ -19,6 +19,7 @@
 #include "NeutralAtomArchitecture.hpp"
 #include "NeutralAtomUtils.hpp"
 #include "hybridmap/NeutralAtomDefinitions.hpp"
+#include "hybridmap/NeutralAtomScheduler.hpp"
 #include "ir/Definitions.hpp"
 #include "ir/QuantumComputation.hpp"
 
@@ -44,6 +45,8 @@ class HybridSynthesisMapper : public NeutralAtomMapper {
   using qcs = std::vector<qc::QuantumComputation>;
 
   qc::QuantumComputation synthesizedQc;
+  uint32_t bufferSize;
+  qc::QuantumComputation bufferedQc{};
   Mapping originalMapping;
   bool initialized = false;
 
@@ -68,8 +71,9 @@ public:
    */
   explicit HybridSynthesisMapper(
       const NeutralAtomArchitecture& arch,
-      const MapperParameters& params = MapperParameters())
-      : NeutralAtomMapper(arch, params) {}
+      const MapperParameters& params = MapperParameters(),
+      const uint32_t bufferSize = 0)
+      : NeutralAtomMapper(arch, params), bufferSize(bufferSize) {}
 
   // Functions
 
@@ -83,6 +87,7 @@ public:
     }
     mappedQc = qc::QuantumComputation(arch->getNpositions());
     synthesizedQc = qc::QuantumComputation(nQubits);
+    bufferedQc = qc::QuantumComputation(nQubits);
     mapping = Mapping(nQubits);
     initialized = true;
     originalMapping = mapping;
@@ -91,9 +96,28 @@ public:
   /**
    * @brief Complete a (re-)mapping of the synthesized circuit to hardware.
    */
-  void completeRemap() {
-    auto qcCopy = synthesizedQc;
-    map(qcCopy, originalMapping);
+  void completeRemap(const bool includeBuffer = true) {
+    if (includeBuffer) {
+      auto copyQC = getSynthesizedQc();
+      map(copyQC, originalMapping);
+    } else {
+      map(synthesizedQc, originalMapping);
+    }
+  }
+
+  /**
+   * @brief Schedule the mapped circuit, appending buffered operations first.
+   */
+  [[nodiscard]] SchedulerResults
+  schedule(const bool verboseArg = false, const bool createAnimationCsv = false,
+           const qc::fp shuttlingSpeedFactor = 1.0) {
+    mapAppend(bufferedQc, this->mapping);
+    for (const auto& op : bufferedQc) {
+      synthesizedQc.emplace_back(op->clone());
+    }
+    bufferedQc.clear();
+    return NeutralAtomMapper::schedule(verboseArg, createAnimationCsv,
+                                       shuttlingSpeedFactor);
   }
 
   /**
@@ -101,7 +125,15 @@ public:
    * @return Synthesized QuantumComputation.
    */
   [[nodiscard]] qc::QuantumComputation getSynthesizedQc() const {
-    return synthesizedQc;
+    qc::QuantumComputation qc(synthesizedQc.getNqubits());
+    qc.reserve(synthesizedQc.size() + bufferedQc.size());
+    for (const auto& op : synthesizedQc) {
+      qc.emplace_back(op->clone());
+    }
+    for (const auto& op : bufferedQc) {
+      qc.emplace_back(op->clone());
+    }
+    return qc;
   }
 
   /**
@@ -110,7 +142,8 @@ public:
    */
   [[nodiscard]] [[maybe_unused]] std::string getSynthesizedQcQASM() const {
     std::stringstream ss;
-    synthesizedQc.dumpOpenQASM(ss, false);
+    const auto copyQC = getSynthesizedQc();
+    copyQC.dumpOpenQASM(ss, false);
     return ss.str();
   }
 
@@ -120,7 +153,8 @@ public:
    */
   [[maybe_unused]] void saveSynthesizedQc(const std::string& filename) const {
     std::ofstream ofs(filename);
-    synthesizedQc.dumpOpenQASM(ofs, false);
+    const auto copyQC = getSynthesizedQc();
+    copyQC.dumpOpenQASM(ofs, false);
     ofs.close();
   }
 

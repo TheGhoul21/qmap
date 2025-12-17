@@ -72,13 +72,13 @@ HybridSynthesisMapper::evaluateSynthesisStep(qc::QuantumComputation& qc,
   NeutralAtomMapper tempMapper(arch, parameters);
   if (!completeRemap) {
     tempMapper.copyStateFrom(*this);
-  } else {
-    qc.reverse();
-    for (auto opPointer = synthesizedQc.rbegin();
-         opPointer != synthesizedQc.rend(); ++opPointer) {
-      qc.emplace_back((*opPointer)->clone());
-    }
-    qc.reverse();
+  }
+
+  qc.reverse();
+  // insert buffered operations
+  for (auto opPointer = bufferedQc.rbegin(); opPointer != bufferedQc.rend();
+       ++opPointer) {
+    qc.emplace_back((*opPointer)->clone());
   }
 
   // Make a copy of qc to avoid modifying the original
