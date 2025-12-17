@@ -136,12 +136,6 @@ public:
                                              bool alsoMap = false);
 
   /**
-   * @brief Append gates without mapping (no SWAPs/shuttling inserted).
-   * @param qc Subcircuit to append as-is.
-   */
-  void appendWithoutMapping(const qc::QuantumComputation& qc);
-
-  /**
    * @brief Append and map a subcircuit to hardware (may insert moves/SWAPs).
    * @param qc Subcircuit to append and map.
    * @param completeRemap If true, completely remap before appending.

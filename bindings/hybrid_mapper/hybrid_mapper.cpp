@@ -268,14 +268,6 @@ PYBIND11_MODULE(MQT_QMAP_MODULE_NAME, m, py::mod_gil_not_used()) {
            "mapped to the hardware as qasm2 to a file.",
            "filename"_a)
       .def(
-          "append_without_mapping",
-          [](na::HybridSynthesisMapper& mapper, qc::QuantumComputation& qc) {
-            mapper.appendWithoutMapping(qc);
-          },
-          "Appends the given QuantumComputation to the synthesized "
-          "QuantumComputation without mapping it to the hardware.",
-          "qc"_a)
-      .def(
           "append_with_mapping",
           [](na::HybridSynthesisMapper& mapper, qc::QuantumComputation& qc,
              bool completeRemap) {

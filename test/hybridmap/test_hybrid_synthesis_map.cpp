@@ -112,25 +112,6 @@ protected:
   }
 };
 
-TEST_F(TestHybridSynthesisMapper, DirectlyMap) {
-  mapper.appendWithoutMapping(qc);
-  const auto synthesizedQc = mapper.getSynthesizedQc();
-  EXPECT_EQ(synthesizedQc.getNqubits(), 3);
-  EXPECT_EQ(synthesizedQc.getNops(), 3);
-}
-
-TEST_F(TestHybridSynthesisMapper, completelyRemap) {
-  mapper.appendWithoutMapping(qc);
-  mapper.appendWithoutMapping(qc);
-  const auto mappedQc = mapper.getMappedQc();
-  EXPECT_EQ(mappedQc.getNqubitsWithoutAncillae(), arch.getNpositions());
-  EXPECT_GE(mappedQc.getNops(), 3);
-
-  const auto mappedQcRemapped = mapper.getMappedQc();
-  EXPECT_EQ(mappedQcRemapped.getNqubitsWithoutAncillae(), arch.getNpositions());
-  EXPECT_GE(mappedQcRemapped.getNops(), 3);
-}
-
 TEST_F(TestHybridSynthesisMapper, MapAppend) {
   mapper.appendWithMapping(qc);
   const auto synthesizedQc = mapper.getSynthesizedQc();
