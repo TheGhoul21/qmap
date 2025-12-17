@@ -303,8 +303,11 @@ PYBIND11_MODULE(MQT_QMAP_MODULE_NAME, m, py::mod_gil_not_used()) {
           "synthesis_steps"_a, "complete_remap"_a = false, "also_map"_a = false)
       .def(
           "complete_remap",
-          [](na::HybridSynthesisMapper& mapper) { mapper.completeRemap(); },
-          "Remaps the QuantumComputation to the hardware.")
+          [](na::HybridSynthesisMapper& mapper, bool includeBuffer) {
+            mapper.completeRemap(includeBuffer);
+          },
+          "Remaps the QuantumComputation to the hardware.",
+          "include_buffer"_a = true)
       .def(
           "schedule",
           [](na::HybridSynthesisMapper& mapper, const bool verbose,
