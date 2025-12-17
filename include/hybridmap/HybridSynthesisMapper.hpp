@@ -43,7 +43,6 @@ class HybridSynthesisMapper : public NeutralAtomMapper {
   using qcs = std::vector<qc::QuantumComputation>;
 
   qc::QuantumComputation synthesizedQc;
-  uint32_t bufferSize;
   qc::QuantumComputation bufferedQc;
   Mapping originalMapping;
   bool initialized = false;
