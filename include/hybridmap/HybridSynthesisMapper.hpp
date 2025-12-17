@@ -94,6 +94,7 @@ public:
 
   /**
    * @brief Complete a (re-)mapping of the synthesized circuit to hardware.
+   * @param includeBuffer If true, include buffered operations in remap.
    */
   void completeRemap(const bool includeBuffer = true) {
     if (includeBuffer) {
