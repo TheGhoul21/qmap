@@ -101,7 +101,8 @@ public:
       auto copyQC = getSynthesizedQc();
       map(copyQC, originalMapping);
     } else {
-      map(synthesizedQc, originalMapping);
+      auto temp = synthesizedQc;
+      this->map(temp, originalMapping);
     }
   }
 
@@ -115,6 +116,7 @@ public:
     for (const auto& op : bufferedQc) {
       synthesizedQc.emplace_back(op->clone());
     }
+    mapAppend(bufferedQc, this->mapping);
     bufferedQc.clear();
     return NeutralAtomMapper::schedule(verboseArg, createAnimationCsv,
                                        shuttlingSpeedFactor);
