@@ -111,7 +111,6 @@ public:
   [[nodiscard]] SchedulerResults
   schedule(const bool verboseArg = false, const bool createAnimationCsv = false,
            const qc::fp shuttlingSpeedFactor = 1.0) {
-    mapAppend(bufferedQc, this->mapping);
     for (const auto& op : bufferedQc) {
       synthesizedQc.emplace_back(op->clone());
     }
