@@ -15,7 +15,6 @@
 
 #include "hybridmap/HybridSynthesisMapper.hpp"
 #include "hybridmap/NeutralAtomArchitecture.hpp"
-#include "hybridmap/NeutralAtomUtils.hpp"
 #include "ir/QuantumComputation.hpp"
 
 #include <filesystem>

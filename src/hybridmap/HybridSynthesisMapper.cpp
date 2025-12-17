@@ -20,7 +20,7 @@
 #include "ir/QuantumComputation.hpp"
 
 #include <cstddef>
-#include <cstdint>
+#include <ranges>
 #include <spdlog/spdlog.h>
 #include <stdexcept>
 #include <utility>
@@ -76,9 +76,8 @@ HybridSynthesisMapper::evaluateSynthesisStep(qc::QuantumComputation& qc,
 
   qc.reverse();
   // insert buffered operations
-  for (auto opPointer = bufferedQc.rbegin(); opPointer != bufferedQc.rend();
-       ++opPointer) {
-    qc.emplace_back((*opPointer)->clone());
+  for (const auto& opPointer : std::ranges::reverse_view(bufferedQc)) {
+    qc.emplace_back(opPointer->clone());
   }
 
   // Make a copy of qc to avoid modifying the original
@@ -119,8 +118,8 @@ AdjacencyMatrix HybridSynthesisMapper::getCircuitAdjacencyMatrix() const {
         continue;
       }
       const auto mappedI = mapping.getHwQubit(i);
-      const auto mappedJ = mapping.getHwQubit(j);
-      if (arch->getSwapDistance(mappedI, mappedJ) == 0) {
+      if (const auto mappedJ = mapping.getHwQubit(j);
+          arch->getSwapDistance(mappedI, mappedJ) == 0) {
         adjMatrix(i, j) = 1;
         adjMatrix(j, i) = 1;
       } else {

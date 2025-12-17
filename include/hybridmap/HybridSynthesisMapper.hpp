@@ -17,13 +17,11 @@
 
 #include "HybridNeutralAtomMapper.hpp"
 #include "NeutralAtomArchitecture.hpp"
-#include "NeutralAtomUtils.hpp"
 #include "hybridmap/NeutralAtomDefinitions.hpp"
 #include "hybridmap/NeutralAtomScheduler.hpp"
 #include "ir/Definitions.hpp"
 #include "ir/QuantumComputation.hpp"
 
-#include <cstddef>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -46,7 +44,7 @@ class HybridSynthesisMapper : public NeutralAtomMapper {
 
   qc::QuantumComputation synthesizedQc;
   uint32_t bufferSize;
-  qc::QuantumComputation bufferedQc{};
+  qc::QuantumComputation bufferedQc;
   Mapping originalMapping;
   bool initialized = false;
 
@@ -68,6 +66,7 @@ public:
    * @brief Construct with device and optional mapper parameters.
    * @param arch Neutral atom architecture.
    * @param params Optional mapper configuration parameters.
+   * @param bufferSize Optional size of buffer for synthesized operations.
    */
   explicit HybridSynthesisMapper(
       const NeutralAtomArchitecture& arch,
