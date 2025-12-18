@@ -65,11 +65,12 @@ public:
   // Constructors
   HybridSynthesisMapper() = delete;
   /**
-   * @brief Construct with device and optional mapper parameters.
-   * @param arch Neutral atom architecture.
-   * @param params Optional mapper configuration parameters.
-   * @param bufferSize Optional size of buffer for synthesized operations.
-   */
+       * @brief Create a HybridSynthesisMapper configured for a neutral-atom device.
+       *
+       * @param arch Neutral-atom device architecture used for mapping and scheduling.
+       * @param params Optional mapper configuration parameters; defaults to MapperParameters().
+       * @param bufferSize Number of operations to hold in the internal buffer before flushing to the synthesized circuit (0 disables buffering).
+       */
   explicit HybridSynthesisMapper(
       const NeutralAtomArchitecture& arch,
       const MapperParameters& params = MapperParameters(),
@@ -79,8 +80,13 @@ public:
   // Functions
 
   /**
-   * @brief Initialize synthesized and mapped circuits and mapping structures.
-   * @param nQubits Number of logical qubits to synthesize.
+   * @brief Initialize internal circuits and mapping state for a given number of logical qubits.
+   *
+   * Sets up the synthesized and buffered quantum computations, the mapped circuit storage,
+   * the logical-to-physical mapping, and records the original mapping; marks the mapper as initialized.
+   *
+   * @param nQubits Number of logical qubits to prepare.
+   * @throws std::runtime_error if `nQubits` exceeds the architecture's available positions.
    */
   void initMapping(const size_t nQubits) {
     if (nQubits > arch->getNpositions()) {
@@ -95,8 +101,14 @@ public:
   }
 
   /**
-   * @brief Complete a (re-)mapping of the synthesized circuit to hardware.
-   * @param includeBuffer If true, include buffered operations in remap.
+   * @brief Remap the synthesized circuit onto the stored original hardware mapping.
+   *
+   * If `includeBuffer` is true, the remap uses the combined synthesized-plus-buffered
+   * circuit returned by getSynthesizedQc(); otherwise it remaps only the internal
+   * synthesizedQc (excluding buffered operations). The result is mapped into
+   * originalMapping.
+   *
+   * @param includeBuffer When true, include buffered operations in the remap.
    */
   void completeRemap(const bool includeBuffer = true) {
     if (includeBuffer) {
@@ -109,7 +121,15 @@ public:
   }
 
   /**
-   * @brief Schedule the mapped circuit, appending buffered operations first.
+   * @brief Appends buffered operations into the synthesized circuit, maps them, and schedules the mapped circuit.
+   *
+   * Appends all operations currently held in the internal buffer to the synthesized circuit, applies mapping for
+   * those appended operations, clears the buffer, and then performs the scheduling pass using the base mapper.
+   *
+   * @param verboseArg Enable verbose scheduling output when true.
+   * @param createAnimationCsv Emit scheduling animation CSV when true.
+   * @param shuttlingSpeedFactor Factor to scale shuttling durations during scheduling (1.0 = nominal speed).
+   * @return SchedulerResults Results produced by the scheduling pass (timing and placement outcomes).
    */
   [[nodiscard]] SchedulerResults
   schedule(const bool verboseArg = false, const bool createAnimationCsv = false,
@@ -124,8 +144,12 @@ public:
   }
 
   /**
-   * @brief Get the currently synthesized (unmapped) circuit.
-   * @return Synthesized QuantumComputation.
+   * @brief Return a combined view of the synthesized and buffered (unmapped) circuit.
+   *
+   * The returned QuantumComputation contains all operations from the mapper's synthesized
+   * circuit followed by any buffered operations, using the mapper's current qubit count.
+   *
+   * @return qc::QuantumComputation A new QuantumComputation with synthesized operations then buffered operations.
    */
   [[nodiscard]] qc::QuantumComputation getSynthesizedQc() const {
     qc::QuantumComputation qc(synthesizedQc.getNqubits());
@@ -140,8 +164,11 @@ public:
   }
 
   /**
-   * @brief Export synthesized circuit as OpenQASM string.
-   * @return QASM representation of the synthesized circuit.
+   * @brief Produce the OpenQASM representation of the synthesized circuit.
+   *
+   * Returns an OpenQASM string for the current synthesized circuit view, including any buffered operations not yet scheduled.
+   *
+   * @return std::string OpenQASM text describing the synthesized (and buffered) circuit.
    */
   [[nodiscard]] [[maybe_unused]] std::string getSynthesizedQcQASM() const {
     std::stringstream ss;
@@ -151,8 +178,9 @@ public:
   }
 
   /**
-   * @brief Save synthesized circuit as OpenQASM to a file.
-   * @param filename Output filename.
+   * @brief Write the current synthesized circuit (including buffered operations) to a file in OpenQASM format.
+   *
+   * @param filename Path to the output file where the OpenQASM representation will be written.
    */
   [[maybe_unused]] void saveSynthesizedQc(const std::string& filename) const {
     std::ofstream ofs(filename);
