@@ -44,7 +44,7 @@ std::vector<qc::fp> HybridSynthesisMapper::evaluateSynthesisSteps(
     if (parameters.verbose) {
       spdlog::info("Evaluating synthesis step number {}", qcIndex);
     }
-    const auto fidelity = evaluateSynthesisStep(qc);
+    const auto fidelity = evaluateSynthesisStep(qc, completeRemap);
     candidates.emplace_back(qc, fidelity);
     if (parameters.verbose) {
       spdlog::info("Fidelity: {}", fidelity);

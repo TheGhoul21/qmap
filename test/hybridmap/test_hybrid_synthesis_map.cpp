@@ -73,7 +73,8 @@ TEST_P(TestParametrizedHybridSynthesisMapper, EvaluateSynthesisStep) {
                std::runtime_error);
   // Initializing with too many qubits to test error handling
   EXPECT_THROW(mapper.initMapping(50), std::runtime_error);
-  const auto best = mapper.evaluateSynthesisSteps(circuits, true);
+  const auto best = mapper.evaluateSynthesisSteps(
+      circuits, GetParam().completeRemap, GetParam().alsoMap);
   EXPECT_EQ(best.size(), 2);
   EXPECT_GE(best[0], 0);
   EXPECT_GE(best[1], 0);
