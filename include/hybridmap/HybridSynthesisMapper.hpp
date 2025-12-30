@@ -55,7 +55,8 @@ class HybridSynthesisMapper : public NeutralAtomMapper {
    * @details Effort considers swaps/shuttling and execution time estimated by
    * the mapper.
    * @param qc Proposed synthesis subcircuit.
-   * @param completeRemap
+   * @param completeRemap If `true`, evaluate by completely remapping the whole
+   * circuit; if `false`, preserve the current mapping state.
    * @return Scalar cost/effort score for mapping qc.
    */
   qc::fp evaluateSynthesisStep(qc::QuantumComputation& qc,
