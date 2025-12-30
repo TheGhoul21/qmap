@@ -123,7 +123,7 @@ public:
       map(copyQC, originalMapping);
     } else {
       auto temp = synthesizedQc;
-      this->map(temp, originalMapping);
+      map(temp, originalMapping);
     }
   }
 
