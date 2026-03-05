@@ -1,0 +1,95 @@
+name: "Hybrid_example arch"
+movement {
+	max_speed: 55.000000
+}
+time {
+	load: 0.200000
+	store: 0.200000
+	rz: 0.500000
+	ry: 0.500000
+	cz: 0.500000
+	unit: "us"
+}
+distance {
+	interaction: 10.000000
+	unit: "um"
+}
+zone hybrid {
+	from: (-10.000000, -10.000000)
+	to: (60.000000, 60.000000) 
+}
+trap trap0 {
+	position: (0.000000, 0.000000)
+}
+trap trap5 {
+	position: (0.000000, 10.000000)
+}
+trap trap10 {
+	position: (0.000000, 20.000000)
+}
+trap trap15 {
+	position: (0.000000, 30.000000)
+}
+trap trap20 {
+	position: (0.000000, 40.000000)
+}
+trap trap1 {
+	position: (10.000000, 0.000000)
+}
+trap trap6 {
+	position: (10.000000, 10.000000)
+}
+trap trap11 {
+	position: (10.000000, 20.000000)
+}
+trap trap16 {
+	position: (10.000000, 30.000000)
+}
+trap trap21 {
+	position: (10.000000, 40.000000)
+}
+trap trap2 {
+	position: (20.000000, 0.000000)
+}
+trap trap7 {
+	position: (20.000000, 10.000000)
+}
+trap trap12 {
+	position: (20.000000, 20.000000)
+}
+trap trap17 {
+	position: (20.000000, 30.000000)
+}
+trap trap22 {
+	position: (20.000000, 40.000000)
+}
+trap trap3 {
+	position: (30.000000, 0.000000)
+}
+trap trap8 {
+	position: (30.000000, 10.000000)
+}
+trap trap13 {
+	position: (30.000000, 20.000000)
+}
+trap trap18 {
+	position: (30.000000, 30.000000)
+}
+trap trap23 {
+	position: (30.000000, 40.000000)
+}
+trap trap4 {
+	position: (40.000000, 0.000000)
+}
+trap trap9 {
+	position: (40.000000, 10.000000)
+}
+trap trap14 {
+	position: (40.000000, 20.000000)
+}
+trap trap19 {
+	position: (40.000000, 30.000000)
+}
+trap trap24 {
+	position: (40.000000, 40.000000)
+}

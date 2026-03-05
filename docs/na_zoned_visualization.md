@@ -19,10 +19,17 @@ intermediate step of the zoned neutral atom compiler pipeline:
 - **Architecture layout** — storage zones, entanglement zones, SLM trap arrays,
   and Rydberg laser ranges drawn to scale.
 - **Compilation step-by-step** — per-layer views of where each atom sits, which
-  atoms move between layers (with curved arrows), and which CZ gates fire in the
-  entanglement zone.
+  atoms move between layers (with curved arrows), single-qubit gate annotations,
+  and Rydberg laser activation during CZ gates.
 - **Full animation** — an animated GIF / MP4 / interactive HTML widget that
   plays through every transition and gate layer automatically.
+
+Here is a preview of a QFT-8 compilation animation:
+
+```{image} images/qft8_compilation.gif
+:alt: QFT-8 compilation animation
+:align: center
+```
 
 All functions live in `mqt.qmap.visualization` and require
 [`matplotlib`](https://matplotlib.org/) (`pip install mqt.qmap[visualization]`).
@@ -105,34 +112,38 @@ print(f"Frames : {2 * debug['n_layers'] + 1}")
 | `n_qubits` | Number of qubits |
 | `n_layers` | Number of two-qubit gate layers |
 | `two_qubit_layers` | `[layer][pair] = [q0, q1]` |
-| `single_qubit_layers` | `[layer][op] = {name, qubits}` |
-| `placement` | `[layer][qubit] = [slm_id, row, col]` |
-| `routing` | `[transition][group] = [qubits]` |
-| `reuse_qubits` | `[transition] = [qubits]` (qubits that skip the return to storage) |
+| `single_qubit_layers` | `[layer][op] = {name, qubits, params}` — `params` holds rotation angles |
+| `placement` | `[frame][qubit] = [slm_id, row, col]` — `2*n_layers+1` snapshots |
+| `routing` | `[transition][group] = [qubits]` — `2*n_layers` transitions |
+| `reuse_qubits` | `[layer] = [qubits]` — qubits that stay in the entanglement zone between layers |
+
+## Frame Layout
+
+The compiler pipeline produces `2 * n_layers + 1` placement snapshots.
+Each frame index maps directly to one snapshot:
+
+| Frame | Placement | What you see |
+|-------|-----------|--------------|
+| `2*i` | loading state before layer *i* | atoms in storage; yellow rings = 1Q gates; curved arrows = upcoming moves |
+| `2*i+1` | atoms in entanglement zone, layer *i* firing | Rydberg laser glow; red bond lines between CZ pairs; green circles = reused qubits |
+| `2*n_layers` | all atoms returned to storage | final resting positions |
+
+Qubits that are *reused* between consecutive layers remain in the entanglement
+zone and may appear there on even (loading) frames too.
 
 ## Inspecting Individual Frames
-
-`visualize_compilation_step` renders a single frame.  Frames alternate between
-two views:
-
-- **Even frames** (0, 2, 4, …) — atoms in their storage positions.  Curved
-  arrows show which atoms will move to the entanglement zone for the next layer,
-  colour-coded by qubit index.  Small qubit labels sit at the midpoint of each
-  arrow.
-- **Odd frames** (1, 3, 5, …) — atoms in the entanglement zone.  Active CZ
-  pairs are connected by a red line with a star at the midpoint.  Qubits that
-  are *reused* (they stay in the entanglement zone rather than returning to
-  storage) are highlighted with a green circle.
 
 ```{code-cell} ipython3
 from mqt.qmap.visualization import visualize_compilation_step
 
-# Frame 0: initial placement + movement arrows for layer 0
+# Frame 0: atoms loading into position — yellow dashed rings annotate
+# single-qubit gates (H here), curved arrows show upcoming moves.
 fig = visualize_compilation_step(debug, ARCH_JSON, frame=0)
 ```
 
 ```{code-cell} ipython3
-# Frame 1: atoms in the entanglement zone executing CZ gates in layer 0
+# Frame 1: CZ layer 0 fires.  Rydberg laser zone glows red, entanglement
+# zone turns scarlet, bond lines connect each CZ pair.
 fig = visualize_compilation_step(debug, ARCH_JSON, frame=1)
 ```
 
@@ -280,18 +291,18 @@ compiler_shor = RoutingAgnosticCompiler(arch)
 compiler_shor.compile(qc_shor)
 debug_shor = compiler_shor.debug_info()
 
-# Frame 0: initial placement — yellow rings show single-qubit gates (H, X),
-# curved arrows show which atoms move down to the entanglement zone.
+# Frame 0: yellow rings show single-qubit gates (H on counting qubits, X on
+# work qubit 20); curved arrows show atoms loading into the entanglement zone.
 fig = visualize_compilation_step(debug_shor, ARCH_JSON, frame=0, figsize=(11, 6))
 ```
 
 ```{code-cell} ipython3
-# Frame 1: first CZ layer fires.  The Rydberg laser zone glows red,
-# the entanglement zone turns scarlet, and a bond line connects the CZ pair.
+# Frame 1: first CZ layer fires — Rydberg laser zone glows red, entanglement
+# zone turns scarlet, bond line connects q0 and q20.
 fig = visualize_compilation_step(debug_shor, ARCH_JSON, frame=1, figsize=(11, 6))
 ```
 
-To generate the full animation:
+To generate and display the full animation in a notebook:
 
 ```{code-cell} ipython3
 :tags: [remove-output]
@@ -299,7 +310,10 @@ anim_shor = animate_compilation(debug_shor, ARCH_JSON, interval=500, max_frames=
 HTML(anim_shor.to_jshtml())
 ```
 
+To save the complete 503-frame animation locally:
+
 ```python
-# Save locally
-anim_shor.save("shor_24q.gif", writer="pillow", fps=2)
+anim_shor.save("shor_24q.gif", writer="pillow", fps=4)   # ~34 MB GIF
+anim_shor.save("shor_24q.mp4", writer="ffmpeg", fps=4,   # ~1.2 MB MP4
+               extra_args=["-vcodec", "libx264", "-pix_fmt", "yuv420p"])
 ```

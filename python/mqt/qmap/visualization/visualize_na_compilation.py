@@ -462,9 +462,72 @@ def visualize_compilation_step(
 
     _render_frame(ax, arch_data, slm_map, debug, frame)
 
-    handles = [mpatches.Patch(color=_qubit_color(q), label=f"q{q}") for q in range(debug["n_qubits"])]
-    ax.legend(handles=handles, loc="upper right", fontsize=7,
-              ncol=max(1, debug["n_qubits"] // 6), framealpha=0.9)
+    import matplotlib.lines as mlines
+
+    is_ent = (frame % 2 == 1) and (frame // 2 < debug["n_layers"])
+
+    # ── qubit colour swatches ─────────────────────────────────────────────
+    qubit_handles = [
+        mpatches.Patch(color=_qubit_color(q), label=f"q{q}")
+        for q in range(debug["n_qubits"])
+    ]
+
+    # ── visual-element legend (always shown) ─────────────────────────────
+    element_handles = [
+        # zones — always present
+        mpatches.Patch(facecolor="#cde8ff", edgecolor="#2980b9",
+                       label="storage zone"),
+        mpatches.Patch(facecolor="#fde8c8", edgecolor="#e67e22",
+                       label="entanglement zone"),
+        mpatches.Patch(facecolor="#ede0f5", edgecolor="#7d3c98",
+                       linestyle="dashed", label="Rydberg laser range"),
+        # atoms
+        mlines.Line2D([], [], color="none", marker="o", markersize=8,
+                      markerfacecolor="#4a90d9", markeredgecolor="white",
+                      label="atom (colour = qubit index)"),
+    ]
+    if is_ent:
+        element_handles += [
+            mpatches.Patch(facecolor="#ff6b6b", edgecolor="#e74c3c",
+                           alpha=0.7, label="Rydberg laser firing"),
+            mlines.Line2D([], [], color="#c0392b", linewidth=2,
+                          label="CZ gate bond"),
+            mlines.Line2D([], [], color="none", marker="o", markersize=10,
+                          markerfacecolor="none", markeredgecolor="#2ecc71",
+                          markeredgewidth=1.5, label="reused qubit (stays in ent. zone)"),
+        ]
+    else:
+        element_handles += [
+            mlines.Line2D([], [], color="#888888", linewidth=1.5,
+                          marker=">", markersize=5,
+                          label="atom move (AOD transport)"),
+            mlines.Line2D([], [], color="none", marker="o", markersize=10,
+                          markerfacecolor="none", markeredgecolor="#f1c40f",
+                          markeredgewidth=1.5, linestyle="dashed",
+                          label="1Q gate being applied"),
+        ]
+
+    # Two-column layout: qubits on the left, elements on the right
+    n_q = debug["n_qubits"]
+    qubit_legend = ax.legend(
+        handles=qubit_handles,
+        loc="upper right",
+        fontsize=7,
+        ncol=max(1, n_q // 8),
+        framealpha=0.9,
+        title="qubits",
+        title_fontsize=7,
+    )
+    ax.add_artist(qubit_legend)
+    ax.legend(
+        handles=element_handles,
+        loc="upper left",
+        fontsize=7,
+        framealpha=0.9,
+        title="legend",
+        title_fontsize=7,
+    )
+
     ax.autoscale_view()
     fig.tight_layout()
     return fig
