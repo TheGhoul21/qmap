@@ -44,6 +44,7 @@ mapping
 synthesis
 na_state_prep
 na_zoned_compiler
+na_zoned_visualization
 na_hybrid
 references
 CHANGELOG

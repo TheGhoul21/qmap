@@ -221,6 +221,25 @@ Returns:
 Returns:
     The statistics as a JSON-style dictionary)pb");
 
+  routingAgnosticCompiler.def(
+      "debug_info",
+      [](const na::zoned::RoutingAgnosticCompiler& self) {
+        const auto pyJson = nb::module_::import_("json");
+        const auto loads = pyJson.attr("loads");
+        const auto dict = loads(self.getDebugInfo().dump());
+        return nb::cast<nb::dict>(dict);
+      },
+      R"pb(Get debug information from the last compilation.
+
+Returns a dictionary with keys: ``n_qubits``, ``n_layers``,
+``two_qubit_layers``, ``single_qubit_layers``, ``placement``,
+``routing``, ``reuse_qubits``. See :meth:`RoutingAwareCompiler.debug_info`
+for the full schema.
+
+Returns:
+    Debug information as a nested dict/list structure, or an empty dict
+    if ``compile()`` has not been called yet.)pb");
+
   //===--------------------------------------------------------------------===//
   // Routing-aware Compiler
   //===--------------------------------------------------------------------===//
@@ -373,4 +392,38 @@ Returns:
 
 Returns:
     The statistics as a dictionary)pb");
+
+  routingAwareCompiler.def(
+      "debug_info",
+      [](const na::zoned::RoutingAwareCompiler& self) {
+        const auto pyJson = nb::module_::import_("json");
+        const auto loads = pyJson.attr("loads");
+        const auto dict = loads(self.getDebugInfo().dump());
+        return nb::cast<nb::dict>(dict);
+      },
+      R"pb(Get debug information captured during the last compilation.
+
+Returns a dictionary with the following keys:
+
+- ``n_qubits``: total number of qubits.
+- ``n_layers``: number of two-qubit gate layers.
+- ``two_qubit_layers``: list of layers; each layer is a list of ``[q0, q1]``
+  pairs (the CZ gates executed in parallel in that layer).
+- ``single_qubit_layers``: list of layers (one per two-qubit gate layer, plus
+  a trailing layer for remaining single-qubit gates); each entry is a list of
+  ``{"name": str, "qubits": [...]}`` dicts.
+- ``placement``: list of n_layers+1 placements.  ``placement[0]`` is the
+  initial placement; ``placement[i]`` and ``placement[i+1]`` enclose
+  two-qubit gate layer ``i``.  Each placement is a list indexed by qubit;
+  each element is ``[slm_id, row, col]``.
+- ``routing``: list of n_layers routings.  ``routing[i]`` moves atoms from
+  ``placement[i]`` to ``placement[i+1]`` as a list of movement groups;
+  each group is a list of qubit indices that can be shuttled simultaneously.
+- ``reuse_qubits``: list of n_layers-1 entries; ``reuse_qubits[i]`` lists
+  qubits that stay in the entanglement zone between layers ``i`` and ``i+1``
+  instead of being returned to storage.
+
+Returns:
+    Debug information as a nested dict/list structure, or an empty dict
+    if ``compile()`` has not been called yet.)pb");
 }

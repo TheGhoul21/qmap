@@ -138,6 +138,18 @@ class RoutingAgnosticCompiler:
             The statistics as a JSON-style dictionary
         """
 
+    def debug_info(self) -> dict:
+        """Get debug information captured during the last compilation.
+
+        Returns a dictionary with keys: ``n_qubits``, ``n_layers``,
+        ``two_qubit_layers``, ``single_qubit_layers``, ``placement``,
+        ``routing``, ``reuse_qubits``.
+
+        Returns:
+            Debug information as a nested dict/list structure, or an empty dict
+            if ``compile()`` has not been called yet.
+        """
+
 class RoutingAwareCompiler:
     """Routing-aware zoned neutral atom compiler."""
 
@@ -218,4 +230,16 @@ class RoutingAwareCompiler:
 
         Returns:
             The statistics as a dictionary
+        """
+
+    def debug_info(self) -> dict:
+        """Get debug information captured during the last compilation.
+
+        Returns a dictionary with keys: ``n_qubits``, ``n_layers``,
+        ``two_qubit_layers``, ``single_qubit_layers``, ``placement``,
+        ``routing``, ``reuse_qubits``.
+
+        Returns:
+            Debug information as a nested dict/list structure, or an empty dict
+            if ``compile()`` has not been called yet.
         """

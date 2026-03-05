@@ -100,6 +100,8 @@ private:
   std::reference_wrapper<const Architecture> architecture_;
   nlohmann::json config_;
   Statistics statistics_;
+  /// Debug information captured during the last call to compile().
+  nlohmann::json debugInfo_;
 
   /**
    * Construct a Compiler instance with the given architecture and
@@ -235,6 +237,71 @@ public:
     SPDLOG_INFO("Time for layout synthesis: {}us",
                 statistics_.layoutSynthesisTime);
 
+    // ── Capture debug information ─────────────────────────────────────────
+    {
+      debugInfo_ = nlohmann::json::object();
+      debugInfo_["n_qubits"] = static_cast<std::size_t>(qComp.getNqubits());
+      debugInfo_["n_layers"] = twoQubitGateLayers.size();
+
+      // Two-qubit gate layers: [ [[q0,q1], ...], ... ]
+      auto& tqgJson = debugInfo_["two_qubit_layers"] = nlohmann::json::array();
+      for (const auto& layer : twoQubitGateLayers) {
+        auto& layerJson = tqgJson.emplace_back(nlohmann::json::array());
+        for (const auto& pair : layer) {
+          layerJson.push_back({pair[0], pair[1]});
+        }
+      }
+
+      // Single-qubit gate layers (decomposed): [ [{"name":..,"qubits":[..]}, ..], .. ]
+      // One layer per two-qubit gate layer plus a trailing layer for remaining gates.
+      auto& sqgJson =
+          debugInfo_["single_qubit_layers"] = nlohmann::json::array();
+      for (const auto& layer : decomposedSingleQubitGateLayers) {
+        auto& layerJson = sqgJson.emplace_back(nlohmann::json::array());
+        for (const auto& opPtr : layer) {
+          const auto& op = *opPtr;
+          const auto usedQubits = op.getUsedQubits();
+          const auto& params = op.getParameter();
+          layerJson.push_back(
+              {{"name", op.getName()},
+               {"qubits",
+                std::vector<qc::Qubit>(usedQubits.begin(), usedQubits.end())},
+               {"params",
+                std::vector<double>(params.begin(), params.end())}});
+        }
+      }
+
+      // Placement: placement[i][qubit] = [slm_id, row, col]
+      // placement[0] = initial placement before any two-qubit gate layer.
+      // placement[i] and placement[i+1] enclose two-qubit gate layer i.
+      auto& placJson = debugInfo_["placement"] = nlohmann::json::array();
+      for (const auto& layerPlacement : placement) {
+        auto& layerJson = placJson.emplace_back(nlohmann::json::array());
+        for (const auto& site : layerPlacement) {
+          const auto& [slmRef, r, c] = site;
+          layerJson.push_back({slmRef.get().id, r, c});
+        }
+      }
+
+      // Routing: routing[i][group] = [qubits moved together]
+      // routing[i] moves atoms from placement[i] to placement[i+1].
+      auto& routJson = debugInfo_["routing"] = nlohmann::json::array();
+      for (const auto& transitionRouting : routing) {
+        auto& transJson = routJson.emplace_back(nlohmann::json::array());
+        for (const auto& group : transitionRouting) {
+          transJson.push_back(group);
+        }
+      }
+
+      // Reuse qubits: reuse_qubits[i] = qubits NOT moved back to storage
+      // between two-qubit gate layers i and i+1.
+      auto& reuseJson = debugInfo_["reuse_qubits"] = nlohmann::json::array();
+      for (const auto& reuseSet : reuseQubits) {
+        reuseJson.push_back(
+            std::vector<qc::Qubit>(reuseSet.begin(), reuseSet.end()));
+      }
+    }
+
     SPDLOG_DEBUG("Generating code...");
     const auto codeGenerationStart = std::chrono::system_clock::now();
     NAComputation code =
@@ -259,6 +326,13 @@ public:
   /// @return the statistics collected during the compilation process.
   [[nodiscard]] auto getStatistics() const -> const Statistics& {
     return statistics_;
+  }
+
+  /// @return debug information captured during the last compilation.
+  /// Contains gate schedule, per-layer qubit placement, atom routing groups,
+  /// and reuse information. Empty until compile() has been called.
+  [[nodiscard]] auto getDebugInfo() const -> const nlohmann::json& {
+    return debugInfo_;
   }
 };
 

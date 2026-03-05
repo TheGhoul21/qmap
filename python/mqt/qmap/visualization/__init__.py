@@ -11,6 +11,15 @@
 from __future__ import annotations
 
 from .search_visualizer import SearchVisualizer
+from .visualize_na_architecture import visualize_architecture
+from .visualize_na_compilation import animate_compilation, visualize_compilation_step
 from .visualize_search_graph import SearchNode, visualize_search_graph
 
-__all__ = ["SearchNode", "SearchVisualizer", "visualize_search_graph"]
+__all__ = [
+    "SearchNode",
+    "SearchVisualizer",
+    "animate_compilation",
+    "visualize_architecture",
+    "visualize_compilation_step",
+    "visualize_search_graph",
+]
