@@ -114,6 +114,12 @@ PRESETS: dict[str, Any] = {
         "n_qubits": 10,
         "n_layers": 3,
     },
+    "Brickwork large (24q, 4 layers)": {
+        "description": "Preset piu corposo ma ancora gestibile su laptop",
+        "builder": "brickwork",
+        "n_qubits": 24,
+        "n_layers": 4,
+    },
     "Custom QASM": {
         "description": "Scrivi il tuo circuito in OpenQASM 3",
         "builder": "qasm",
@@ -561,6 +567,50 @@ def render_layer_mp4(
         os.unlink(tmp_path)
 
 
+@st.cache_data(show_spinner=False, max_entries=8)
+def render_full_mp4(
+    debug_json: str,
+    arch_json: str,
+    figsize_w: float,
+    figsize_h: float,
+    sub_frames: int = 4,
+    fps: float = 10.0,
+    max_frames: int | None = None,
+) -> bytes:
+    """Render a full-compilation MP4 movie (all logical frames by default)."""
+    import os
+    import tempfile
+    import matplotlib
+    matplotlib.use("Agg")
+    from mqt.qmap.visualization import save_compilation_animation
+
+    debug = json.loads(debug_json)
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+        tmp_path = f.name
+    try:
+        save_compilation_animation(
+            debug,
+            arch_json,
+            tmp_path,
+            fps=fps,
+            figsize=(figsize_w, figsize_h),
+            dpi=96,
+            max_frames=max_frames,
+            start_frame=0,
+            show_circuit=True,
+            smooth_movement=True,
+            sub_frames_per_move=sub_frames,
+            sub_frames_per_gate=max(10, sub_frames * 3),
+            gate_duration_s=0.9,
+            verbose=False,
+        )
+        with open(tmp_path, "rb") as f:
+            return f.read()
+    finally:
+        os.unlink(tmp_path)
+
+
 def render_minimal_video_player(
     mp4_bytes: bytes,
     figsize_h: float,
@@ -668,7 +718,7 @@ def _preload_worker(
         if cancel.is_set():
             break
         try:
-            render_layer_gif(debug_json, arch_json, layer, fig_w, fig_h, sub_frames, gif_fps)
+            render_layer_gif(debug_json, arch_json, 2 * layer, fig_w, fig_h, sub_frames, gif_fps)
             status[layer] = True
         except Exception:
             status[layer] = False   # mark done even on failure so button re-enables
@@ -754,6 +804,7 @@ def main() -> None:
     st.session_state.setdefault("_video_loop", False)
     st.session_state.setdefault("_video_muted", True)
     st.session_state.setdefault("_video_controls", False)
+    st.session_state.setdefault("_full_movie_max_frames", 0)
 
     # ─────────────────────────────── SIDEBAR ──────────────────────────────────
     with st.sidebar:
@@ -843,6 +894,8 @@ def main() -> None:
                               disabled=(cur >= total - 2), on_click=_goto, args=(cur + 2,))
 
             with st.expander("Auto-play"):
+                view_mode_side = st.session_state.get("_view_mode", "Micro-movie (MP4)")
+                full_movie_mode = view_mode_side == "Movie completa (MP4)"
                 st.session_state["autoplay_interval"] = st.slider(
                     "Intervallo (sec)", 0.5, 5.0,
                     float(st.session_state["autoplay_interval"]), 0.1,
@@ -851,7 +904,7 @@ def main() -> None:
                 ap1, ap2 = st.columns(2)
                 with ap1:
                     if st.button("Play step-by-step", use_container_width=True,
-                                 disabled=st.session_state["autoplay"]):
+                                 disabled=st.session_state["autoplay"] or full_movie_mode):
                         st.session_state["autoplay"] = True
                         st.rerun()
                 with ap2:
@@ -859,19 +912,34 @@ def main() -> None:
                                  disabled=not st.session_state["autoplay"]):
                         st.session_state["autoplay"] = False
                         st.rerun()
+                if full_movie_mode:
+                    st.caption("In Movie completa usa i controlli del player video.")
 
             with st.expander("Opzioni"):
                 st.slider("Larghezza figura", 10.0, 24.0, 17.0, 0.5, key="_fig_w")
                 st.slider("Altezza figura", 7.0, 16.0, 10.0, 0.5, key="_fig_h")
                 st.radio(
                     "Modalita",
-                    ["Micro-movie (MP4)", "Micro-movie (GIF)", "Frame statico"],
+                    ["Micro-movie (MP4)", "Movie completa (MP4)", "Micro-movie (GIF)", "Frame statico"],
                     key="_view_mode",
                 )
-                if st.session_state.get("_view_mode") in ("Micro-movie (GIF)", "Micro-movie (MP4)"):
+                if st.session_state.get("_view_mode") in (
+                    "Micro-movie (GIF)",
+                    "Micro-movie (MP4)",
+                    "Movie completa (MP4)",
+                ):
                     st.slider("Sub-frame", 2, 12, 4, 1, key="_sub_frames")
                     st.slider("FPS", 4.0, 20.0, 10.0, 1.0, key="_gif_fps")
-                if st.session_state.get("_view_mode") == "Micro-movie (MP4)":
+                if st.session_state.get("_view_mode") == "Movie completa (MP4)":
+                    st.slider(
+                        "Max frame logici (0 = tutti)",
+                        0,
+                        400,
+                        int(st.session_state.get("_full_movie_max_frames", 0)),
+                        5,
+                        key="_full_movie_max_frames",
+                    )
+                if st.session_state.get("_view_mode") in ("Micro-movie (MP4)", "Movie completa (MP4)"):
                     st.toggle("Video autoplay", key="_video_autoplay")
                     st.toggle("Video loop", key="_video_loop")
                     st.toggle("Video muted", key="_video_muted")
@@ -974,11 +1042,14 @@ def main() -> None:
         )
 
     # ── Visualization fragment ─────────────────────────────────────────────────
-    run_every: float | None = interval if autoplay else None
+    view_mode_now = st.session_state.get("_view_mode", "Micro-movie (MP4)")
+    run_every: float | None = interval if (autoplay and view_mode_now != "Movie completa (MP4)") else None
 
     @st.fragment(run_every=run_every)
     def _viz() -> None:
-        if st.session_state["autoplay"]:
+        view_mode = st.session_state.get("_view_mode", "Micro-movie (MP4)")
+
+        if st.session_state["autoplay"] and view_mode != "Movie completa (MP4)":
             cur = st.session_state["frame"]
             tot = st.session_state["total_frames"]
             if cur < tot - 1:
@@ -997,7 +1068,6 @@ def main() -> None:
         layer = f // 2
 
         # ── Render ────────────────────────────────────────────────────────────
-        view_mode = st.session_state.get("_view_mode", "Micro-movie (MP4)")
         if view_mode == "Micro-movie (MP4)":
             sub_frames = st.session_state.get("_sub_frames", 4)
             gif_fps = st.session_state.get("_gif_fps", 10.0)
@@ -1033,6 +1103,46 @@ def main() -> None:
                 except Exception as exc:
                     st.error(f"Errore micro-movie: {exc}")
                     return
+        elif view_mode == "Movie completa (MP4)":
+            sub_frames = st.session_state.get("_sub_frames", 4)
+            gif_fps = st.session_state.get("_gif_fps", 10.0)
+            max_frames_ui = int(st.session_state.get("_full_movie_max_frames", 0))
+            max_frames = None if max_frames_ui <= 0 else max_frames_ui
+            with st.spinner("Rendering movie completa..."):
+                try:
+                    mp4 = render_full_mp4(
+                        dbg_json,
+                        DEFAULT_ARCH_JSON,
+                        fw,
+                        fh,
+                        sub_frames=sub_frames,
+                        fps=gif_fps,
+                        max_frames=max_frames,
+                    )
+                    autoplay = st.session_state.get("_video_autoplay", False)
+                    loop = st.session_state.get("_video_loop", False)
+                    muted = st.session_state.get("_video_muted", True)
+                    controls = st.session_state.get("_video_controls", False)
+
+                    if controls:
+                        st.video(
+                            mp4,
+                            format="video/mp4",
+                            autoplay=autoplay,
+                            loop=loop,
+                            muted=muted,
+                        )
+                    else:
+                        render_minimal_video_player(
+                            mp4,
+                            figsize_h=fh,
+                            autoplay=autoplay,
+                            loop=loop,
+                            muted=muted,
+                        )
+                except Exception as exc:
+                    st.error(f"Errore movie completa: {exc}")
+                    return
         elif view_mode == "Micro-movie (GIF)":
             sub_frames = st.session_state.get("_sub_frames", 4)
             gif_fps = st.session_state.get("_gif_fps", 10.0)
@@ -1065,20 +1175,23 @@ def main() -> None:
 
         # ── Quick-nav (compact) ───────────────────────────────────────────────
         st.markdown("---")
-        st.caption("Flusso consigliato: Step + per alternare Shuttle → CZ → Shuttle...")
-        q1, q2, q3, q4 = st.columns(4)
-        with q1:
-            st.button("◀ Step", key="qnav_prev_step", use_container_width=True,
-                      disabled=(f == 0), on_click=_goto, args=(f - 1,))
-        with q2:
-            st.button("Step ▶", key="qnav_next_step", use_container_width=True,
-                      disabled=(f >= tot - 1), on_click=_goto, args=(f + 1,))
-        with q3:
-            st.button("◀ Layer", key="qnav_prev_layer", use_container_width=True,
-                      disabled=(f < 2), on_click=_goto, args=(f - 2,))
-        with q4:
-            st.button("Layer ▶", key="qnav_next_layer", use_container_width=True,
-                      disabled=(f >= tot - 2), on_click=_goto, args=(f + 2,))
+        if view_mode != "Movie completa (MP4)":
+            st.caption("Flusso consigliato: Step + per alternare Shuttle → CZ → Shuttle...")
+            q1, q2, q3, q4 = st.columns(4)
+            with q1:
+                st.button("◀ Step", key="qnav_prev_step", use_container_width=True,
+                          disabled=(f == 0), on_click=_goto, args=(f - 1,))
+            with q2:
+                st.button("Step ▶", key="qnav_next_step", use_container_width=True,
+                          disabled=(f >= tot - 1), on_click=_goto, args=(f + 1,))
+            with q3:
+                st.button("◀ Layer", key="qnav_prev_layer", use_container_width=True,
+                          disabled=(f < 2), on_click=_goto, args=(f - 2,))
+            with q4:
+                st.button("Layer ▶", key="qnav_next_layer", use_container_width=True,
+                          disabled=(f >= tot - 2), on_click=_goto, args=(f + 2,))
+        else:
+            st.caption("Movie completa: usa Play/Pause + barra progress per seguire step-by-step.")
 
         # ── Detail panel ──────────────────────────────────────────────────────
         st.markdown("---")
