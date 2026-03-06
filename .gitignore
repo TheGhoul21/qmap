@@ -174,3 +174,6 @@ out/build
 
 node_modules/
 wheelhouse/
+
+# Streamlit presentation persistent media cache
+.presentation_media_cache/

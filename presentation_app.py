@@ -17,6 +17,7 @@ Run:
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import sys
 import threading
@@ -26,6 +27,49 @@ from typing import Any
 
 import streamlit as st
 import streamlit.components.v1 as components
+
+
+def _persistent_media_cache_dir() -> Path:
+    """Return the on-disk cache directory for rendered media assets."""
+    cache_dir = Path(__file__).parent / ".presentation_media_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _persistent_media_cache_key(kind: str, **parts: Any) -> str:
+    """Build a stable hash key for a rendered media asset."""
+    payload = {"version": 1, "kind": kind, **parts}
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def _persistent_media_read(cache_key: str, ext: str) -> bytes | None:
+    """Read a cached media blob from disk if it exists."""
+    path = _persistent_media_cache_dir() / f"{cache_key}{ext}"
+    try:
+        if path.exists():
+            return path.read_bytes()
+    except OSError:
+        return None
+    return None
+
+
+def _persistent_media_write(cache_key: str, ext: str, data: bytes) -> None:
+    """Atomically write a media blob to persistent cache."""
+    cache_dir = _persistent_media_cache_dir()
+    target = cache_dir / f"{cache_key}{ext}"
+    if target.exists():
+        return
+
+    tmp = cache_dir / f"{cache_key}.{uuid.uuid4().hex}.tmp"
+    try:
+        tmp.write_bytes(data)
+        tmp.replace(target)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 # ── path setup ────────────────────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent / "python"))
@@ -103,6 +147,23 @@ PRESETS: dict[str, Any] = {
         "builder": "qft",
         "n_qubits": 8,
     },
+    "QFT large (18q)": {
+        "description": "QFT piu corposa su 18 qubit (safe per demo)",
+        "builder": "qft",
+        "n_qubits": 18,
+    },
+    "QPE phase-Z (10q)": {
+        "description": "QPE-style: 9 qubit di stima + 1 target (depth-heavy)",
+        "builder": "qpe",
+        "n_qubits": 10,
+        "counting_qubits": 9,
+    },
+    "QPE medium (12q)": {
+        "description": "QPE-style piu corposa: 10 qubit stima + 1 target + 1 ancilla",
+        "builder": "qpe",
+        "n_qubits": 12,
+        "counting_qubits": 10,
+    },
     "Dense CZ grid (12q)": {
         "description": "Griglia densa di CZ — stress test del router",
         "builder": "dense_grid",
@@ -119,6 +180,18 @@ PRESETS: dict[str, Any] = {
         "builder": "brickwork",
         "n_qubits": 24,
         "n_layers": 4,
+    },
+    "Brickwork XL (30q, 5 layers)": {
+        "description": "Preset XL con alta parallelizzazione (buono per movie completa)",
+        "builder": "brickwork",
+        "n_qubits": 30,
+        "n_layers": 5,
+    },
+    "QAOA ring (28q, p=6)": {
+        "description": "Pattern locale su anello: profondo ma regolare",
+        "builder": "qaoa_ring",
+        "n_qubits": 28,
+        "p_layers": 6,
     },
     "Custom QASM": {
         "description": "Scrivi il tuo circuito in OpenQASM 3",
@@ -160,6 +233,53 @@ def _build_circuit(preset_name: str, preset: dict[str, Any], qasm_text: str):
             qc.h(i)
             for j in range(i + 1, n):
                 qc.cz(i, j)
+        return qc, n
+
+    if b == "qpe":
+        n = preset["n_qubits"]
+        n_count = preset.get("counting_qubits", n - 1)
+        if n_count >= n:
+            raise ValueError("counting_qubits must be smaller than n_qubits")
+
+        qc = ir.QuantumComputation(n)
+        target = n_count
+
+        qc.x(target)
+
+        for q in range(n_count):
+            qc.h(q)
+
+        for k in range(n_count):
+            reps = 1 << k
+            for _ in range(reps):
+                qc.cz(k, target)
+
+        for i in range(n_count - 1, -1, -1):
+            for j in range(i - 1, -1, -1):
+                qc.cz(j, i)
+            qc.h(i)
+
+        return qc, n
+
+    if b == "qaoa_ring":
+        n = preset["n_qubits"]
+        p_layers = preset.get("p_layers", 4)
+        qc = ir.QuantumComputation(n)
+
+        for _ in range(p_layers):
+            for q in range(n):
+                qc.h(q)
+
+            for i in range(0, n - 1, 2):
+                qc.cz(i, i + 1)
+
+            for i in range(1, n - 1, 2):
+                qc.cz(i, i + 1)
+            qc.cz(n - 1, 0)
+
+            for q in range(n):
+                qc.h(q)
+
         return qc, n
 
     if b == "dense_grid":
@@ -498,6 +618,21 @@ def render_layer_gif(
     start = max(0, min(frame, total_frames - 1))
     end = min(start + 1, total_frames)
 
+    cache_key = _persistent_media_cache_key(
+        "layer_gif",
+        debug=debug_json,
+        arch=arch_json,
+        frame=start,
+        figsize_w=figsize_w,
+        figsize_h=figsize_h,
+        sub_frames=sub_frames,
+        fps=fps,
+        gate_duration_s=0.9,
+    )
+    cached = _persistent_media_read(cache_key, ".gif")
+    if cached is not None:
+        return cached
+
     with tempfile.NamedTemporaryFile(suffix=".gif", delete=False) as f:
         tmp_path = f.name
     try:
@@ -516,7 +651,9 @@ def render_layer_gif(
             verbose=False,
         )
         with open(tmp_path, "rb") as f:
-            return f.read()
+            data = f.read()
+        _persistent_media_write(cache_key, ".gif", data)
+        return data
     finally:
         os.unlink(tmp_path)
 
@@ -544,6 +681,21 @@ def render_layer_mp4(
     start = max(0, min(frame, total_frames - 1))
     end = min(start + 1, total_frames)
 
+    cache_key = _persistent_media_cache_key(
+        "layer_mp4",
+        debug=debug_json,
+        arch=arch_json,
+        frame=start,
+        figsize_w=figsize_w,
+        figsize_h=figsize_h,
+        sub_frames=sub_frames,
+        fps=fps,
+        gate_duration_s=0.9,
+    )
+    cached = _persistent_media_read(cache_key, ".mp4")
+    if cached is not None:
+        return cached
+
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
         tmp_path = f.name
     try:
@@ -562,7 +714,9 @@ def render_layer_mp4(
             verbose=False,
         )
         with open(tmp_path, "rb") as f:
-            return f.read()
+            data = f.read()
+        _persistent_media_write(cache_key, ".mp4", data)
+        return data
     finally:
         os.unlink(tmp_path)
 
@@ -586,6 +740,21 @@ def render_full_mp4(
 
     debug = json.loads(debug_json)
 
+    cache_key = _persistent_media_cache_key(
+        "full_mp4",
+        debug=debug_json,
+        arch=arch_json,
+        figsize_w=figsize_w,
+        figsize_h=figsize_h,
+        sub_frames=sub_frames,
+        fps=fps,
+        max_frames=max_frames,
+        gate_duration_s=0.9,
+    )
+    cached = _persistent_media_read(cache_key, ".mp4")
+    if cached is not None:
+        return cached
+
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
         tmp_path = f.name
     try:
@@ -606,7 +775,9 @@ def render_full_mp4(
             verbose=False,
         )
         with open(tmp_path, "rb") as f:
-            return f.read()
+            data = f.read()
+        _persistent_media_write(cache_key, ".mp4", data)
+        return data
     finally:
         os.unlink(tmp_path)
 
