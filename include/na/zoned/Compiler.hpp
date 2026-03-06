@@ -20,6 +20,14 @@
 #include "layout_synthesizer/placer/VertexMatchingPlacer.hpp"
 #include "layout_synthesizer/router/IndependentSetRouter.hpp"
 #include "na/NAComputation.hpp"
+#include "na/operations/GlobalCZOp.hpp"
+#include "na/operations/GlobalRYOp.hpp"
+#include "na/operations/LoadOp.hpp"
+#include "na/operations/LocalRZOp.hpp"
+#include "na/operations/LocalUOp.hpp"
+#include "na/operations/MoveOp.hpp"
+#include "na/operations/ShuttlingOp.hpp"
+#include "na/operations/StoreOp.hpp"
 #include "reuse_analyzer/VertexMatchingReuseAnalyzer.hpp"
 #include "scheduler/ASAPScheduler.hpp"
 
@@ -308,6 +316,66 @@ public:
         SELF.generate(decomposedSingleQubitGateLayers, placement, routing);
     const auto codeGenerationEnd = std::chrono::system_clock::now();
     assert(code.validate().first);
+    
+    // ── Capture true operations from the generator ────────────────
+    auto& opsJson = debugInfo_["operations"] = nlohmann::json::array();
+    for (const auto& opPtr : code) {
+      nlohmann::json opJson;
+      if (opPtr->is<na::ShuttlingOp>()) {
+        const auto& shuttlingOp = opPtr->as<na::ShuttlingOp>();
+        if (opPtr->is<na::MoveOp>()) {
+          opJson["type"] = "move";
+          const auto& moveOp = opPtr->as<na::MoveOp>();
+          auto& targetsJson = opJson["targets"] = nlohmann::json::array();
+          for (const auto& target : moveOp.getTargetLocations()) {
+            targetsJson.push_back({target.x, target.y});
+          }
+        } else if (opPtr->is<na::LoadOp>()) {
+          opJson["type"] = "load";
+        } else if (opPtr->is<na::StoreOp>()) {
+          opJson["type"] = "store";
+        } else {
+          opJson["type"] = "unknown";
+        }
+        auto& qubitsJson = opJson["qubits"] = nlohmann::json::array();
+        for (const auto* atom : shuttlingOp.getAtoms()) {
+          const auto name = atom->getName();
+          if (name.rfind("atom", 0) == 0) {
+            qubitsJson.push_back(std::stoull(name.substr(4)));
+          } else {
+            qubitsJson.push_back(name);
+          }
+        }
+      } else if (opPtr->is<na::GlobalCZOp>()) {
+        opJson["type"] = "cz";
+      } else if (opPtr->is<na::LocalUOp>()) {
+        opJson["type"] = "local_u";
+        const auto& op = opPtr->as<na::LocalUOp>();
+        auto& qubitsJson = opJson["qubits"] = nlohmann::json::array();
+        for (const auto* atom : op.getAtoms()) {
+            const auto name = atom->getName();
+            if (name.rfind("atom", 0) == 0) {
+              qubitsJson.push_back(std::stoull(name.substr(4)));
+            }
+        }
+      } else if (opPtr->is<na::LocalRZOp>()) {
+        opJson["type"] = "local_rz";
+        const auto& op = opPtr->as<na::LocalRZOp>();
+        auto& qubitsJson = opJson["qubits"] = nlohmann::json::array();
+        for (const auto* atom : op.getAtoms()) {
+            const auto name = atom->getName();
+            if (name.rfind("atom", 0) == 0) {
+              qubitsJson.push_back(std::stoull(name.substr(4)));
+            }
+        }
+      } else if (opPtr->is<na::GlobalRYOp>()) {
+        opJson["type"] = "global_ry";
+      } else {
+        opJson["type"] = "other_gate";
+      }
+      opsJson.push_back(opJson);
+    }
+    
     statistics_.codeGenerationTime =
         std::chrono::duration_cast<std::chrono::microseconds>(
             codeGenerationEnd - codeGenerationStart)

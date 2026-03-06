@@ -109,6 +109,29 @@ def compilation_guard(
 # ── shared geometry helpers ────────────────────────────────────────────────────
 
 
+def _arch_axis_limits(arch: dict[str, Any], pad: float = 6.0) -> tuple[float, float, float, float]:
+    """Return fixed (xmin, xmax, ymin, ymax) for the architecture.
+
+    Derived from arch_range if present, otherwise from the union of all zone
+    bounding boxes.  A constant pad is added so zone borders are fully visible.
+    The same limits are used on every frame so the view never jumps.
+    """
+    if "arch_range" in arch:
+        (rx0, ry0), (rx1, ry1) = arch["arch_range"]
+        return float(rx0) - pad, float(rx1) + pad, float(ry0) - pad, float(ry1) + pad
+
+    # Fallback: scan all SLM bboxes
+    xs, ys = [], []
+    for zone in arch.get("storage_zones", []) + arch.get("entanglement_zones", []):
+        for slm in zone["slms"]:
+            g = _slm_coords(slm)
+            xs += [g["bbox"][0], g["bbox"][2]]
+            ys += [g["bbox"][1], g["bbox"][3]]
+    if not xs:
+        return -10.0, 110.0, -10.0, 70.0
+    return min(xs) - pad, max(xs) + pad, min(ys) - pad, max(ys) + pad
+
+
 def _slm_coords(slm: dict[str, Any]) -> dict[str, Any]:
     """Pre-compute geometry for an SLM: site positions and bounding box."""
     loc_x, loc_y = slm["location"]
@@ -425,8 +448,12 @@ def _render_frame(
                        edgecolors="#2ecc71", linewidths=1.5, zorder=10)
 
     # ── single-qubit gate indicators ──────────────────────────────────────
-    # 1Q gates: glow ring on atom + compact label floating just above.
-    # No tall beams — everything stays within the zone bounding box.
+    # 1Q gates: tall vertical laser beams targeting the atom.
+    from matplotlib.patches import Rectangle
+    _, _, _, arch_ymax = _arch_axis_limits(arch)
+    beam_color = "#00ffcc"
+    core_color = "#e6ffff"
+
     sq_layers: list[list[dict[str, Any]]] = debug.get("single_qubit_layers", [])
     sq_on_qubit: dict[int, list[tuple[str, list[float]]]] = {}
     if not is_entanglement_frame and layer_idx < len(sq_layers):
@@ -435,41 +462,53 @@ def _render_frame(
             for q in op["qubits"]:
                 sq_on_qubit.setdefault(q, []).append(entry)
 
-        # For large circuits (many qubits with 1Q gates), avoid label clutter.
-        # If more than MAX_LABELED qubits get labels, fall back to glow-only.
-        MAX_LABELED = 12
+        MAX_LABELED = 20
         n_affected = len(sq_on_qubit)
         show_labels = n_affected <= MAX_LABELED
 
         for q_idx, (q, ops) in enumerate(sorted(sq_on_qubit.items())):
             x, y = _qubit_xy(slm_map, current_placement[q])
 
-            # Outer glow ring (dashed yellow circle around atom)
-            ax.scatter([x], [y], s=420, facecolors="#f1c40f", alpha=0.15,
+            # Draw laser beam from the top of the architecture down to the atom
+            beam_width = 3.5
+            beam_height = arch_ymax - y
+            if beam_height < 0:
+                beam_height = 20  # fallback
+
+            ax.add_patch(Rectangle(
+                (x - beam_width / 2, y), beam_width, beam_height,
+                linewidth=0, facecolor=beam_color, alpha=0.25, zorder=4
+            ))
+            # Core of the beam
+            ax.plot([x, x], [y, max(y, arch_ymax)], color=core_color, linewidth=1.2, alpha=0.9, zorder=5)
+
+            # Impact glow on the atom
+            ax.scatter([x], [y], s=500, facecolors=beam_color, alpha=0.35,
                        zorder=7, linewidths=0)
             ax.scatter([x], [y], s=260, facecolors="none",
-                       edgecolors="#f1c40f", linewidths=1.5,
+                       edgecolors=beam_color, linewidths=1.5,
                        linestyles="dashed", zorder=10, alpha=0.9)
 
             if show_labels:
-                # Compact label: gate name floats just above the atom.
-                # Alternate slightly left/right to reduce column overlap.
                 parts = [_format_gate(name, params) for name, params in ops]
-                label = ", ".join(parts)
-                x_shift = 2.5 if (q_idx % 2 == 0) else -2.5
-                ax.annotate(
+                # If multiple gates, stack them vertically
+                label = "\n".join(parts)
+                
+                # Position the Quantikz-style box clearly visible on the atom/beam
+                # We place it slightly above the atom exactly on the beam's path.
+                y_label = y + 5
+                
+                ax.text(
+                    x, y_label,
                     label,
-                    xy=(x, y), xytext=(x + x_shift, y - 3.5),
-                    fontsize=4.5, ha="center", va="bottom",
-                    color="#7d6608", fontweight="bold", zorder=12,
-                    bbox=dict(boxstyle="round,pad=0.18", fc="#fffde7",
-                              ec="#f1c40f", alpha=0.92, linewidth=0.8),
-                    arrowprops=dict(arrowstyle="-", color="#f1c40f",
-                                    lw=0.5, alpha=0.5),
+                    fontsize=7, ha="center", va="center",
+                    color="black", zorder=15,
+                    bbox=dict(boxstyle="square,pad=0.4", fc="white",
+                              ec="black", linewidth=1.2, alpha=0.95)
                 )
 
         if not show_labels:
-            # Summarise: group identical gate signatures and show a compact note.
+            # Summarise
             gate_groups: dict[str, list[int]] = {}
             for q, ops in sq_on_qubit.items():
                 sig = ", ".join(_format_gate(n, p) for n, p in ops)
@@ -479,9 +518,9 @@ def _render_frame(
             ]
             summary = "1Q gates: " + ";  ".join(summary_parts)
             ax.text(0.5, 0.02, summary, fontsize=5.5, ha="center", va="bottom",
-                    transform=ax.transAxes, color="#7d6608", fontweight="bold",
-                    bbox=dict(boxstyle="round,pad=0.25", fc="#fffde7",
-                              ec="#f1c40f", alpha=0.92, linewidth=0.8))
+                    transform=ax.transAxes, color="#004d40", fontweight="bold",
+                    bbox=dict(boxstyle="round,pad=0.25", fc="#e0f2f1",
+                              ec=beam_color, alpha=0.92, linewidth=0.8))
 
     # ── title ─────────────────────────────────────────────────────────────
     if is_entanglement_frame:
@@ -833,6 +872,8 @@ def _draw_frame_info(
                       ec="#dee2e6", alpha=0.9, linewidth=0.5))
 
 
+
+
 # ── legend construction ──────────────────────────────────────────────────────
 
 def _build_legends(
@@ -936,150 +977,119 @@ def _draw_circuit_overview(
     debug: dict[str, Any],
     frame_idx: int,
 ) -> None:
-    """Draw a qubit × layer grid showing the compiled gate schedule.
-
-    Rows = qubits.  Column pairs = layers (1Q phase | 2Q phase).
-    - Yellow cell: qubit has a 1Q gate in that layer.
-    - Red cell:    qubit is in a CZ pair for that layer.
-    - Green border: qubit is reused (stays in ent. zone).
-    - Current layer pair is highlighted with a thick red border.
-    """
-    from matplotlib.patches import FancyBboxPatch, Rectangle
-
+    """Draw the transformed circuit in a Quantikz style."""
+    from matplotlib.patches import Rectangle
+    
     n_layers = debug["n_layers"]
     n_qubits = debug["n_qubits"]
     tq_layers = debug["two_qubit_layers"]
     sq_layers = debug.get("single_qubit_layers", [])
     reuse = debug.get("reuse_qubits", [])
-
-    cur_layer = frame_idx // 2
-
-    # Build lookup: layer → set of qubits with 1Q gates
-    sq_qubits: list[set[int]] = []
-    for i in range(n_layers):
-        s: set[int] = set()
-        if i < len(sq_layers):
-            for op in sq_layers[i]:
-                s.update(op["qubits"])
-        sq_qubits.append(s)
-
-    # Build lookup: layer → set of qubits in CZ pairs
-    tq_qubits: list[set[int]] = []
-    for i in range(n_layers):
-        s = set()
-        for pair in tq_layers[i]:
-            s.update(pair)
-        tq_qubits.append(s)
-
-    MAX_VIS_LAYERS = 24
-    MAX_LABELED_QUBITS = 16   # show qubit labels on Y axis up to this count
-    # Compact mode: cells too small to fit text when many qubits or many layers
-    compact = n_qubits > MAX_LABELED_QUBITS
-
-    if n_layers > MAX_VIS_LAYERS:
-        half = MAX_VIS_LAYERS // 2
-        l_start = max(0, min(cur_layer - half, n_layers - MAX_VIS_LAYERS))
-        l_end = l_start + MAX_VIS_LAYERS
+    
+    layer_idx = frame_idx // 2
+    
+    ax.cla()
+    if n_layers == 0 or n_qubits == 0:
+        ax.axis("off")
+        return
+        
+    MAX_L = 20
+    if n_layers > MAX_L:
+        half = MAX_L // 2
+        l_start = max(0, min(layer_idx - half, n_layers - MAX_L))
+        l_end = l_start + MAX_L
     else:
         l_start, l_end = 0, n_layers
-
-    vis_layers = range(l_start, l_end)
-    n_vis = len(vis_layers)
-
-    # Cell size: shrink when many qubits to keep the grid compact.
-    cell_w = 1.0
-    cell_h = min(1.0, 24.0 / max(n_qubits, 1))
-    total_w = n_vis * 2 * cell_w
-    total_h = n_qubits * cell_h
-
-    ax.set_xlim(-1.5, total_w + 1.5)
-    ax.set_ylim(-0.3, total_h + 0.3)
-    ax.invert_yaxis()
-    if not compact:
-        ax.set_yticks([q * cell_h + cell_h / 2 for q in range(n_qubits)])
-        ax.set_yticklabels([f"q{q}" for q in range(n_qubits)], fontsize=4)
+        
+    MAX_Q = 20
+    # To keep it centered around active qubits, find active set
+    active_qubits: set[int] = set()
+    if layer_idx < len(tq_layers):
+        for p1, p2 in tq_layers[layer_idx]:
+            active_qubits.update([p1, p2])
+    if layer_idx < len(sq_layers) and sq_layers[layer_idx]:
+        for op in sq_layers[layer_idx]:
+            active_qubits.update(op["qubits"])
+            
+    avg_q = sum(active_qubits) // len(active_qubits) if active_qubits else n_qubits // 2
+    if n_qubits > MAX_Q:
+        q_start = max(0, min(avg_q - MAX_Q // 2, n_qubits - MAX_Q))
+        q_end = q_start + MAX_Q
     else:
-        # For many qubits, label only every Nth qubit
-        step = max(1, n_qubits // 8)
-        ax.set_yticks([q * cell_h + cell_h / 2 for q in range(0, n_qubits, step)])
-        ax.set_yticklabels([f"q{q}" for q in range(0, n_qubits, step)], fontsize=4)
-    ax.tick_params(axis="y", length=0, pad=2)
-    ax.set_xticks([])
+        q_start, q_end = 0, n_qubits
+
+    n_vis_layers = l_end - l_start
+    n_vis_qubits = q_end - q_start
+
+    # Coordinate system: x from 0 to n_vis_layers, y from 0 to n_vis_qubits
+    ax.set_xlim(-1.5, n_vis_layers + 0.5)
+    ax.set_ylim(-0.8, n_vis_qubits + 0.8)
+    ax.invert_yaxis()  # Qubit 0 at the top
+    
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.spines["bottom"].set_visible(False)
     ax.spines["left"].set_visible(False)
+    ax.set_xticks([])
+    ax.set_yticks([])
 
-    # Layer labels along top (only every other when compact)
-    label_step = 2 if n_vis > 12 else 1
-    for vi, i in enumerate(vis_layers):
-        if vi % label_step == 0:
-            col_x = vi * 2 * cell_w
-            ax.text(col_x + cell_w, -0.2, f"L{i}",
-                    fontsize=3.5, ha="center", va="bottom",
-                    color="#444444", fontweight="bold")
+    # Draw layer labels
+    for vi, l in enumerate(range(l_start, l_end)):
+        ax.text(vi, -0.6, f"L{l}", fontsize=6, ha="center", va="bottom", color="#444444", fontweight="bold")
 
-    # Draw cells
-    reuse_set_per_layer: list[set[int]] = [
-        set(reuse[i]) if i < len(reuse) else set() for i in range(n_layers)
-    ]
-
-    for vi, i in enumerate(vis_layers):
-        col_1q = vi * 2 * cell_w
-        col_2q = col_1q + cell_w
-        is_cur = (i == cur_layer)
-
-        for q in range(n_qubits):
-            row_y = q * cell_h
-
-            # 1Q cell
-            has_1q = q in sq_qubits[i]
-            fc_1q = "#f9e154" if has_1q else "#f5f5f5"
-            ec_1q = "#b7950b" if has_1q else "#e0e0e0"
-            ax.add_patch(Rectangle(
-                (col_1q, row_y), cell_w, cell_h,
-                facecolor=fc_1q, edgecolor=ec_1q, linewidth=0.4, zorder=2))
-            if has_1q and not compact and cell_h >= 0.6:
-                gates = [_format_gate(op["name"], op.get("params", []))
-                         for op in sq_layers[i] if q in op["qubits"]]
-                ax.text(col_1q + cell_w / 2, row_y + cell_h / 2,
-                        ",".join(gates),
-                        fontsize=3, ha="center", va="center",
-                        color="#7d6608", fontweight="bold", zorder=3)
-
-            # 2Q cell
-            has_2q = q in tq_qubits[i]
-            is_reused = q in reuse_set_per_layer[i]
-            fc_2q = "#f1948a" if has_2q else "#f5f5f5"
-            lw_2q = 1.2 if is_reused else 0.4
-            ec_2q = "#2ecc71" if is_reused else ("#c0392b" if has_2q else "#e0e0e0")
-            ax.add_patch(Rectangle(
-                (col_2q, row_y), cell_w, cell_h,
-                facecolor=fc_2q, edgecolor=ec_2q, linewidth=lw_2q, zorder=2))
-            if has_2q and not compact and cell_h >= 0.6:
-                ax.text(col_2q + cell_w / 2, row_y + cell_h / 2, "CZ",
-                        fontsize=3, ha="center", va="center",
-                        color="#922b21", fontweight="bold", zorder=3)
-
-        # Highlight current active phase with a thick border
+    # Draw Qubit wire lines and labels
+    for vi, q in enumerate(range(q_start, q_end)):
+        ax.plot([-0.5, n_vis_layers - 0.5], [vi, vi], color="black", linewidth=1.0, zorder=1)
+        ax.text(-0.7, vi, f"q{q}", fontsize=7, ha="right", va="center", color="black", fontweight="bold", zorder=2)
+        
+    # Draw Gates
+    for vi, l in enumerate(range(l_start, l_end)):
+        is_cur = (l == layer_idx)
+        
+        # Current layer highlight
         if is_cur:
-            hi_col = col_1q if (frame_idx % 2 == 0) else col_2q
+            c_hl = "#f4d03f" if frame_idx % 2 == 0 else "#e74c3c"
             ax.add_patch(Rectangle(
-                (hi_col, 0), cell_w, total_h,
-                facecolor="none", edgecolor="#e74c3c", linewidth=2,
-                linestyle="-", zorder=5))
-
-    # Compact inline legend to the right
-    ax.text(total_w + 0.2, total_h * 0.15, "\u25a0 1Q",
-            fontsize=3.5, va="center", ha="left", color="#b7950b")
-    ax.text(total_w + 0.2, total_h * 0.50, "\u25a0 CZ",
-            fontsize=3.5, va="center", ha="left", color="#c0392b")
-    ax.text(total_w + 0.2, total_h * 0.85, "\u25a0 reuse",
-            fontsize=3.5, va="center", ha="left", color="#2ecc71")
-
-    suffix = f"  (L{l_start}\u2013L{l_end - 1} of {n_layers - 1})" \
-        if n_layers > MAX_VIS_LAYERS else ""
-    ax.set_title(f"Compiled gate schedule{suffix}", fontsize=6, pad=2)
+                (vi - 0.4, -0.4),
+                0.8, n_vis_qubits - 0.2,
+                facecolor=c_hl, edgecolor=c_hl, alpha=0.15, zorder=0, linewidth=1.5,
+                linestyle="dashed"
+            ))
+            ax.add_patch(Rectangle(
+                (vi - 0.4, -0.4),
+                0.8, n_vis_qubits - 0.2,
+                facecolor="none", edgecolor=c_hl, alpha=0.8, zorder=0, linewidth=2
+            ))
+            
+        # Draw 1Q blocks
+        if l < len(sq_layers) and sq_layers[l]:
+            for op in sq_layers[l]:
+                for q in op["qubits"]:
+                    if q_start <= q < q_end:
+                        yq = q - q_start
+                        gate_label = _format_gate(op["name"], op.get("params", []))
+                        # Draw a cute square with text
+                        ax.text(vi, yq, gate_label, fontsize=6.5, ha="center", va="center",
+                                color="black", zorder=10,
+                                bbox=dict(boxstyle="square,pad=0.3", fc="white", ec="black", lw=1.2))
+                                
+        # Draw 2Q blocks (CZ)
+        if l < len(tq_layers) and tq_layers[l]:
+            for p1, p2 in tq_layers[l]:
+                if q_start <= p1 < q_end or q_start <= p2 < q_end:
+                    v1 = max(0, min(p1 - q_start, n_vis_qubits - 1))
+                    v2 = max(0, min(p2 - q_start, n_vis_qubits - 1))
+                    
+                    # Vertical connector
+                    ax.plot([vi, vi], [min(v1, v2), max(v1, v2)], color="black", linewidth=1.5, zorder=5)
+                    # Dots
+                    if q_start <= p1 < q_end:
+                        ax.scatter([vi], [p1 - q_start], s=40, color="black", zorder=6)
+                    if q_start <= p2 < q_end:
+                        ax.scatter([vi], [p2 - q_start], s=40, color="black", zorder=6)
+                        
+    suffix = f" (Showing L{l_start}-L{l_end-1})" if n_layers > MAX_L else ""
+    ax.set_title(f"Transformed Circuit {suffix}", fontsize=9, pad=8, fontweight="bold")
 
 
 # ── public API ─────────────────────────────────────────────────────────────────
@@ -1137,30 +1147,38 @@ def visualize_compilation_step(
     #   Left column (78%):  atom view | gate schedule overview | timeline
     #   Right column (22%): legends + info panel
     if show_circuit and n_layers > 0:
-        fig = plt.figure(figsize=figsize or (19.2, 10.8), constrained_layout=True)
+        fig = plt.figure(figsize=figsize or (19.2, 10.8))
         gs = GridSpec(
             3, 2, figure=fig,
             height_ratios=[5.5, 1.6, 0.7],
             width_ratios=[4.5, 1],
+            left=0.05, right=0.98, top=0.93, bottom=0.06,
+            wspace=0.04, hspace=0.35,
         )
         ax = fig.add_subplot(gs[0, 0])
         ax_overview = fig.add_subplot(gs[1, 0])
         ax_timeline = fig.add_subplot(gs[2, 0])
         ax_right = fig.add_subplot(gs[:, 1])   # full right column: legends + info
     else:
-        fig, ax = plt.subplots(figsize=figsize or (14, 9), constrained_layout=True)
+        fig, ax = plt.subplots(figsize=figsize or (14, 9))
+        fig.subplots_adjust(left=0.07, right=0.97, top=0.93, bottom=0.07)
         ax_overview = None
         ax_timeline = None
         ax_right = None
 
-    ax.set_aspect("equal")
-    ax.invert_yaxis()
+    ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel("")
     ax.set_ylabel("y (\u00b5m)")
     ax.grid(visible=True, linestyle=":", linewidth=0.4, color="#cccccc", zorder=0)
 
+    xmin, xmax, ymin, ymax = _arch_axis_limits(arch_data)
+
     _render_frame(ax, arch_data, slm_map, debug, frame)
-    ax.autoscale_view()
+
+    # Enforce fixed limits AFTER render so set_aspect("box") shrinks the box,
+    # not the data limits — prevents axis jumping between frames.
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymax, ymin)   # ymax first → y-axis inverted (y increases downward)
 
     is_ent = (frame % 2 == 1) and (frame // 2 < n_layers)
     if ax_right is not None:
@@ -1176,6 +1194,162 @@ def visualize_compilation_step(
     return fig
 
 
+def _has_movement_between(
+    slm_map: dict[int, dict[str, Any]],
+    placements: list[list[list[int]]],
+    routing: list[list[list[int]]],
+    logical_frame: int,
+    direction: str,
+) -> bool:
+    """Return True if any qubit moves in *direction* at *logical_frame*.
+
+    ``direction="store"`` checks movement from the previous entanglement
+    placement back to storage; ``"load"`` checks forward to the next
+    entanglement placement.
+    """
+    if direction == "store":
+        ri, src_idx, dst_idx = logical_frame - 1, logical_frame - 1, logical_frame
+    else:
+        ri, src_idx, dst_idx = logical_frame, logical_frame, logical_frame + 1
+    if ri < 0 or ri >= len(routing):
+        return False
+    if src_idx >= len(placements) or dst_idx >= len(placements):
+        return False
+    return any(
+        _qubit_xy(slm_map, placements[src_idx][q]) != _qubit_xy(slm_map, placements[dst_idx][q])
+        for group in routing[ri] for q in group
+    )
+
+
+def _build_expanded_frames(
+    debug: dict[str, Any],
+    slm_map: dict[int, dict[str, Any]],
+    n_logical: int,
+    smooth_movement: bool,
+    sub_frames_per_move: int,
+) -> tuple[list[Any], bool]:
+    """Build the expanded frame list shared by the animation and save helpers.
+
+    When the *debug* dict contains an ``"operations"`` key (ops-mode) and
+    *smooth_movement* is True, each load/move/store operation produces one or
+    more entries so that atoms are animated step-by-step.  Otherwise, a
+    simpler per-routing-group interpolation is used.
+
+    Returns:
+        ``(expanded, use_ops)`` where *use_ops* is True when the ops path is
+        taken.  Items in *expanded* are dicts (ops path) or tuples
+        ``(logical_frame, phase, t, group_idx)`` (legacy path).
+    """
+    routing = debug["routing"]
+    placements = debug["placement"]
+    use_ops = "operations" in debug
+    expanded: list[Any] = []
+
+    if use_ops and smooth_movement:
+        ops = debug["operations"]
+        n_qubits = debug.get("n_qubits", 0)
+        current_pos: dict[int, tuple[float, float]] = {}
+        if placements:
+            for q in range(n_qubits):
+                current_pos[q] = _qubit_xy(slm_map, placements[0][q])
+        logical_frame = 0
+        active_load: set[int] = set()
+        for op in ops:
+            if logical_frame * 2 >= n_logical:
+                break
+            op_type = op.get("type", "unknown")
+            qubits = op.get("qubits", [])
+            if op_type == "load":
+                for q in qubits:
+                    active_load.add(q)
+                expanded.append({
+                    "phase": "load",
+                    "logical_frame": logical_frame,
+                    "current_pos": dict(current_pos),
+                    "active_qubits": list(qubits),
+                    "active_load": set(active_load),
+                    "t": 1.0,
+                })
+            elif op_type == "store":
+                for q in qubits:
+                    active_load.discard(q)
+                expanded.append({
+                    "phase": "store",
+                    "logical_frame": logical_frame,
+                    "current_pos": dict(current_pos),
+                    "active_qubits": list(qubits),
+                    "active_load": set(active_load),
+                    "t": 1.0,
+                })
+            elif op_type == "move":
+                targets = op.get("targets", [])
+                start_pos = {q: current_pos[q] for q in qubits}
+                end_pos = {q: (targets[i][0], targets[i][1]) for i, q in enumerate(qubits)}
+                for s in range(sub_frames_per_move):
+                    t = s / max(sub_frames_per_move - 1, 1)
+                    t_smooth = 4 * t**3 if t < 0.5 else 1 - (-2 * t + 2)**3 / 2
+                    frame_pos = dict(current_pos)
+                    for q in qubits:
+                        x0, y0 = start_pos[q]
+                        x1, y1 = end_pos[q]
+                        frame_pos[q] = (x0 + (x1 - x0) * t_smooth, y0 + (y1 - y0) * t_smooth)
+                    expanded.append({
+                        "phase": "move",
+                        "logical_frame": logical_frame,
+                        "current_pos": frame_pos,
+                        "active_qubits": list(qubits),
+                        "active_load": set(active_load),
+                        "start_pos": start_pos,
+                        "end_pos": end_pos,
+                        "t": t_smooth,
+                    })
+                for q in qubits:
+                    current_pos[q] = end_pos[q]
+            elif op_type == "cz":
+                if logical_frame % 2 == 0:
+                    logical_frame += 1
+                expanded.append({
+                    "phase": "cz",
+                    "logical_frame": logical_frame,
+                    "current_pos": dict(current_pos),
+                    "active_qubits": [],
+                    "active_load": set(active_load),
+                    "t": 1.0,
+                })
+                logical_frame += 1
+            elif op_type in ("local_u", "local_rz"):
+                expanded.append({
+                    "phase": "1q",
+                    "logical_frame": logical_frame,
+                    "current_pos": dict(current_pos),
+                    "active_qubits": list(qubits),
+                    "active_load": set(active_load),
+                    "t": 1.0,
+                })
+    elif smooth_movement:
+        for f in range(n_logical):
+            is_ent = (f % 2 == 1)
+            if is_ent:
+                expanded.append((f, "static", 1.0, 0))
+            else:
+                if _has_movement_between(slm_map, placements, routing, f, "store"):
+                    for g_idx in range(len(routing[f - 1])):
+                        for s in range(sub_frames_per_move):
+                            t = s / max(sub_frames_per_move - 1, 1)
+                            expanded.append((f, "store_move", t, g_idx))
+                expanded.append((f, "static", 1.0, 0))
+                if _has_movement_between(slm_map, placements, routing, f, "load"):
+                    for g_idx in range(len(routing[f])):
+                        for s in range(sub_frames_per_move):
+                            t = s / max(sub_frames_per_move - 1, 1)
+                            expanded.append((f, "load_move", t, g_idx))
+    else:
+        for f in range(n_logical):
+            expanded.append((f, "static", 1.0, 0))
+
+    return expanded, use_ops
+
+
 def animate_compilation(
     debug: dict[str, Any],
     arch: str | dict[str, Any],
@@ -1184,12 +1358,21 @@ def animate_compilation(
     repeat: bool = True,
     max_frames: int | None = None,
     show_circuit: bool = True,
+    smooth_movement: bool = True,
+    sub_frames_per_move: int = 6,
 ) -> "matplotlib.animation.FuncAnimation":
     """Create an animated step-through of the full compilation.
 
-    Each frame alternates between storage placements (with movement arrows
-    showing both LOAD and STORE shuttle paths) and entanglement-zone
-    placements (with CZ highlights). Total frames = ``2 * n_layers + 1``.
+    Each logical frame alternates between storage placements (with LOAD/STORE
+    arrows) and entanglement-zone placements (with CZ highlights).
+
+    When *smooth_movement* is True (default), qubit shuttling is animated with
+    ``sub_frames_per_move`` interpolated sub-frames between logical frames.
+    The STORE phase (entanglement → storage) and the LOAD phase (storage →
+    entanglement) are shown as separate smooth movement sequences so that
+    the route chosen by the compiler in both directions is clearly visible.
+    Qubits belonging to the same routing group (moved together in the AOD)
+    are connected with a thin line during movement.
 
     When *show_circuit* is True, a circuit timeline and info panel are
     displayed below the main view.
@@ -1208,12 +1391,16 @@ def animate_compilation(
     Args:
         debug: The dictionary returned by ``compiler.debug_info()``.
         arch: Architecture JSON string or dict.
-        interval: Milliseconds between frames.
+        interval: Milliseconds between static/gate frames.
         figsize: Figure size in inches.
         repeat: Whether the animation loops.
-        max_frames: Cap the number of frames rendered (useful for large
-                    circuits). ``None`` renders all frames.
+        max_frames: Cap the number of *logical* frames rendered (useful for
+                    large circuits). ``None`` renders all frames.
         show_circuit: If True, show circuit timeline and info panels.
+        smooth_movement: If True, insert interpolated sub-frames for each
+                         shuttle movement so atoms glide rather than teleport.
+        sub_frames_per_move: Number of sub-frames per shuttle direction when
+                             smooth_movement is True.
 
     Returns:
         A :class:`matplotlib.animation.FuncAnimation`.
@@ -1229,54 +1416,95 @@ def animate_compilation(
     arch_data: dict[str, Any] = json.loads(arch) if isinstance(arch, str) else dict(arch)
     slm_map = _build_slm_map(arch_data)
     n_layers = debug["n_layers"]
-    n_frames = 2 * n_layers + 1
+
+    n_logical = 2 * n_layers + 1
     if max_frames is not None:
-        n_frames = min(n_frames, max_frames)
+        n_logical = min(n_logical, max_frames)
+
+    expanded, use_ops = _build_expanded_frames(
+        debug, slm_map, n_logical, smooth_movement, sub_frames_per_move
+    )
+    n_expanded = len(expanded)
 
     if show_circuit and n_layers > 0:
-        fig = plt.figure(figsize=figsize or (19.2, 10.8), constrained_layout=True)
+        fig = plt.figure(figsize=figsize or (19.2, 10.8))
         gs = GridSpec(
             3, 2, figure=fig,
             height_ratios=[5.5, 1.6, 0.7],
             width_ratios=[4.5, 1],
+            left=0.05, right=0.98, top=0.93, bottom=0.06,
+            wspace=0.04, hspace=0.35,
         )
         ax = fig.add_subplot(gs[0, 0])
         ax_overview = fig.add_subplot(gs[1, 0])
         ax_timeline = fig.add_subplot(gs[2, 0])
         ax_right = fig.add_subplot(gs[:, 1])
     else:
-        fig, ax = plt.subplots(figsize=figsize or (14, 9), constrained_layout=True)
+        fig, ax = plt.subplots(figsize=figsize or (14, 9))
+        fig.subplots_adjust(left=0.07, right=0.97, top=0.93, bottom=0.07)
         ax_overview = None
         ax_timeline = None
         ax_right = None
 
-    def _update(frame: int) -> None:
+    xmin, xmax, ymin, ymax = _arch_axis_limits(arch_data)
+
+    # Per-expanded-frame interval: movement sub-frames are faster.
+    move_interval = max(25, interval // max(sub_frames_per_move, 1))
+    intervals = []
+    for item in expanded:
+        phase = item["phase"] if use_ops else item[1]
+        intervals.append(move_interval if phase in ("store_move", "load_move", "move") else interval)
+    avg_interval = sum(intervals) / max(len(intervals), 1)
+
+    def _update(exp_idx: int) -> None:
+        if use_ops and smooth_movement:
+            fdat = expanded[exp_idx]
+            logical_frame = fdat["logical_frame"]
+            phase = fdat["phase"]
+            t = fdat.get("t", 1.0)
+            group_idx = 0
+        else:
+            logical_frame, phase, t, group_idx = expanded[exp_idx]
+
         ax.cla()
-        ax.set_aspect("equal")
-        ax.invert_yaxis()
+        ax.set_aspect("equal", adjustable="box")
         ax.set_xlabel("")
         ax.set_ylabel("y (\u00b5m)")
         ax.grid(visible=True, linestyle=":", linewidth=0.4,
                 color="#cccccc", zorder=0)
-        _render_frame(ax, arch_data, slm_map, debug, frame)
-        ax.autoscale_view()
 
-        is_ent = (frame % 2 == 1) and (frame // 2 < n_layers)
+        if use_ops and smooth_movement and phase in ("move", "load", "store", "cz", "1q"):
+            _render_ops_frame(ax, arch_data, slm_map, debug, fdat)
+        elif phase == "store_move":
+            _render_directional_interpolation(
+                ax, arch_data, slm_map, debug, logical_frame,
+                direction="store", t=t, group_idx=group_idx)
+        elif phase == "load_move":
+            _render_directional_interpolation(
+                ax, arch_data, slm_map, debug, logical_frame,
+                direction="load", t=t, group_idx=group_idx)
+        else:
+            _render_frame(ax, arch_data, slm_map, debug, logical_frame)
+
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymax, ymin)
+
+        is_ent = (logical_frame % 2 == 1) and (logical_frame // 2 < n_layers)
         if ax_right is not None:
             ax_right.cla()
             _build_legends(ax_right, debug, is_ent)
-            _draw_frame_info(ax_right, debug, frame, arch_data, slm_map,
+            _draw_frame_info(ax_right, debug, logical_frame, arch_data, slm_map,
                              y_top=0.48)
 
         if ax_overview is not None:
             ax_overview.cla()
-            _draw_circuit_overview(ax_overview, debug, frame)
+            _draw_circuit_overview(ax_overview, debug, logical_frame)
         if ax_timeline is not None:
             ax_timeline.cla()
-            _draw_circuit_timeline(ax_timeline, debug, frame)
+            _draw_circuit_timeline(ax_timeline, debug, logical_frame)
 
-    anim = animation.FuncAnimation(fig, _update, frames=n_frames,
-                                   interval=interval, repeat=repeat,
+    anim = animation.FuncAnimation(fig, _update, frames=n_expanded,
+                                   interval=avg_interval, repeat=repeat,
                                    blit=False)
     return anim
 
@@ -1285,112 +1513,236 @@ def save_compilation_animation(
     debug: dict[str, Any],
     arch: str | dict[str, Any],
     path: str,
-    fps: float = 2.0,
+    fps: float = 4.0,
     figsize: tuple[float, float] | None = None,
     dpi: int = 80,
     max_frames: int | None = None,
     show_circuit: bool = True,
+    smooth_movement: bool = True,
+    sub_frames_per_move: int = 4,
     verbose: bool = True,
 ) -> None:
     """Save a compilation animation directly to a GIF or MP4 file.
 
-    Unlike :func:`animate_compilation` (which uses FuncAnimation and keeps
-    the entire animation in memory), this function renders each frame
-    independently with :func:`visualize_compilation_step`, closes the
-    matplotlib figure immediately, and writes only the compressed pixel data.
-    Memory usage stays roughly constant regardless of frame count.
+    This is the **memory-efficient** alternative to calling
+    ``animate_compilation(...).save(...)``.  Each frame is rendered into a
+    temporary PNG on disk, the matplotlib figure is closed immediately, and
+    only the tiny PNG file remains until final assembly — so peak RAM usage
+    is independent of the total frame count.
 
-    For GIF output (path ending in ``.gif``) ``pillow`` is required.
-    For MP4 output (path ending in ``.mp4``) ``ffmpeg`` is required.
+    When *smooth_movement* is True (default) and *debug* contains an
+    ``"operations"`` key, every load/move/store step is expanded into
+    *sub_frames_per_move* intermediate frames so atoms glide smoothly,
+    matching the visual detail of :func:`animate_compilation`.
+
+    GIF output requires ``pillow``; MP4/WebM output requires ``ffmpeg``.
+    High-quality GIF also benefits from ``ffmpeg`` (via palette optimisation);
+    pass ``use_ffmpeg_gif=True`` to force it when ffmpeg is available.
 
     Recommended parameters for large circuits:
-      - ``figsize=(12, 6.75)`` — half-resolution (1280×720 at 96 dpi)
-      - ``dpi=80`` — reduces per-frame pixel count vs the 1920×1080 default
-      - ``max_frames=50`` — cap long animations during exploration
+      - ``figsize=(12, 6.75)`` + ``dpi=80``  →  960 × 540 px per frame
+      - ``sub_frames_per_move=4``             →  fewer frames, faster render
+      - ``max_frames=50``                     →  cap during exploration
 
     Args:
         debug: The dictionary returned by ``compiler.debug_info()``.
         arch: Architecture JSON string or dict.
-        path: Output file path. Extension determines format (``.gif``/``.mp4``).
-        fps: Frames per second.
-        figsize: Figure size in inches. Defaults to ``(12, 6.75)`` (≈1280×720).
-        dpi: Dots per inch when rasterising each frame.
-        max_frames: If set, stop after this many frames.
-        show_circuit: Passed through to :func:`visualize_compilation_step`.
+        path: Output file path.  Extension determines format
+              (``.gif`` / ``.mp4`` / ``.webm``).
+        fps: Frames per second for static/gate frames.  Movement sub-frames
+             are played at ``fps * sub_frames_per_move`` so they feel fluid.
+        figsize: Figure size in inches.  Defaults to ``(12, 6.75)``.
+        dpi: Rasterisation dots-per-inch.  Lower values reduce file size.
+        max_frames: Cap on logical frames (2·n_layers+1 total).  Does not
+                    count movement sub-frames.
+        show_circuit: Show circuit timeline and info panel.
+        smooth_movement: If True, build full ops-based sub-frame sequence.
+        sub_frames_per_move: Interpolated frames per atom movement.
         verbose: Print progress every 10 frames.
     """
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+
     try:
-        import io
         import matplotlib.pyplot as plt
-        from PIL import Image
+        from matplotlib.gridspec import GridSpec
     except ImportError as e:
-        msg = "pillow and matplotlib are required: pip install pillow matplotlib"
+        msg = "matplotlib is required: pip install matplotlib"
         raise ImportError(msg) from e
 
     arch_data: dict[str, Any] = json.loads(arch) if isinstance(arch, str) else dict(arch)
+    slm_map = _build_slm_map(arch_data)
     n_layers = debug["n_layers"]
-    n_frames = 2 * n_layers + 1
+    n_logical = 2 * n_layers + 1
     if max_frames is not None:
-        n_frames = min(n_frames, max_frames)
+        n_logical = min(n_logical, max_frames)
 
-    _anim_figsize = figsize or (12.0, 6.75)   # 1280×~540 at 80dpi — much smaller than 1920×1080
-    path_lower = path.lower()
-    use_ffmpeg = path_lower.endswith(".mp4") or path_lower.endswith(".webm")
+    xmin, xmax, ymin, ymax = _arch_axis_limits(arch_data)
+    _figsize = figsize or (12.0, 6.75)
 
-    if use_ffmpeg:
-        import subprocess, tempfile, os
-        tmpdir = tempfile.mkdtemp(prefix="qmap_anim_")
-        try:
-            for f in range(n_frames):
-                fig = visualize_compilation_step(
-                    debug, arch_data, frame=f,
-                    figsize=_anim_figsize, show_circuit=show_circuit,
-                )
-                fig.savefig(f"{tmpdir}/frame_{f:05d}.png", dpi=dpi)
-                plt.close(fig)
-                if verbose and (f + 1) % 10 == 0:
-                    print(f"  rendered {f + 1}/{n_frames} frames...")
+    expanded, use_ops = _build_expanded_frames(
+        debug, slm_map, n_logical, smooth_movement, sub_frames_per_move
+    )
+    n_expanded = len(expanded)
+
+    # Movement sub-frames play faster so shuttling looks smooth
+    move_fps = fps * max(sub_frames_per_move, 1)
+
+    def _render_item_to_fig(item: Any) -> "matplotlib.figure.Figure":
+        """Create the full figure layout, render one expanded frame, return it."""
+        if use_ops and smooth_movement:
+            fdat = item
+            logical_frame: int = fdat["logical_frame"]
+            phase: str = fdat["phase"]
+            t: float = fdat.get("t", 1.0)
+            group_idx: int = 0
+        else:
+            logical_frame, phase, t, group_idx = item
+
+        is_ent = (logical_frame % 2 == 1) and (logical_frame // 2 < n_layers)
+
+        if show_circuit and n_layers > 0:
+            fig = plt.figure(figsize=_figsize)
+            gs = GridSpec(
+                3, 2, figure=fig,
+                height_ratios=[5.5, 1.6, 0.7],
+                width_ratios=[4.5, 1],
+                left=0.05, right=0.98, top=0.93, bottom=0.06,
+                wspace=0.04, hspace=0.35,
+            )
+            ax = fig.add_subplot(gs[0, 0])
+            ax_overview = fig.add_subplot(gs[1, 0])
+            ax_timeline = fig.add_subplot(gs[2, 0])
+            ax_right = fig.add_subplot(gs[:, 1])
+        else:
+            fig, ax = plt.subplots(figsize=_figsize)
+            fig.subplots_adjust(left=0.07, right=0.97, top=0.93, bottom=0.07)
+            ax_overview = ax_timeline = ax_right = None
+
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_ylabel("y (\u00b5m)")
+        ax.grid(visible=True, linestyle=":", linewidth=0.4, color="#cccccc", zorder=0)
+
+        if use_ops and smooth_movement and phase in ("move", "load", "store", "cz", "1q"):
+            _render_ops_frame(ax, arch_data, slm_map, debug, fdat)
+        elif not (use_ops and smooth_movement) and phase == "store_move":
+            _render_directional_interpolation(
+                ax, arch_data, slm_map, debug, logical_frame,
+                direction="store", t=t, group_idx=group_idx)
+        elif not (use_ops and smooth_movement) and phase == "load_move":
+            _render_directional_interpolation(
+                ax, arch_data, slm_map, debug, logical_frame,
+                direction="load", t=t, group_idx=group_idx)
+        else:
+            _render_frame(ax, arch_data, slm_map, debug, logical_frame)
+
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymax, ymin)
+
+        if ax_right is not None:
+            _build_legends(ax_right, debug, is_ent)
+            _draw_frame_info(ax_right, debug, logical_frame, arch_data, slm_map, y_top=0.48)
+        if ax_overview is not None:
+            _draw_circuit_overview(ax_overview, debug, logical_frame)
+        if ax_timeline is not None:
+            _draw_circuit_timeline(ax_timeline, debug, logical_frame)
+
+        return fig
+
+    # ── Render all frames to a temporary directory ─────────────────────────
+    tmpdir = tempfile.mkdtemp(prefix="qmap_anim_")
+    frame_paths: list[str] = []
+    frame_durations_ms: list[int] = []
+
+    try:
+        for i, item in enumerate(expanded):
+            phase = item["phase"] if (use_ops and smooth_movement) else item[1]
+            is_move = phase in ("move", "store_move", "load_move")
+            duration_ms = int(1000 / (move_fps if is_move else fps))
+
+            fig = _render_item_to_fig(item)
+            fpath = os.path.join(tmpdir, f"frame_{i:05d}.png")
+            fig.savefig(fpath, dpi=dpi)
+            plt.close(fig)   # ← release matplotlib memory immediately
+            frame_paths.append(fpath)
+            frame_durations_ms.append(duration_ms)
+
+            if verbose and (i + 1) % 10 == 0:
+                print(f"  rendered {i + 1}/{n_expanded} frames...")
+
+        # ── Assemble output ────────────────────────────────────────────────
+        path_lower = path.lower()
+        if path_lower.endswith(".mp4") or path_lower.endswith(".webm"):
+            # Variable-duration MP4: use ffmpeg concat demuxer
+            concat_file = os.path.join(tmpdir, "concat.txt")
+            with open(concat_file, "w") as f:
+                for fpath, dur_ms in zip(frame_paths, frame_durations_ms):
+                    f.write(f"file '{fpath}'\n")
+                    f.write(f"duration {dur_ms / 1000:.6f}\n")
             cmd = [
-                "ffmpeg", "-y", "-r", str(fps),
-                "-i", f"{tmpdir}/frame_%05d.png",
-                "-c:v", "libx264", "-pix_fmt", "yuv420p", path,
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                "-i", concat_file,
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                path,
             ]
             subprocess.run(cmd, check=True, capture_output=not verbose)
-        finally:
-            import shutil
-            shutil.rmtree(tmpdir, ignore_errors=True)
-    else:
-        # GIF: render each frame → PIL image → close figure → accumulate PIL images.
-        # PIL images are ~10-50× smaller in memory than the matplotlib figure object.
-        pil_frames: list[Image.Image] = []
-        for f in range(n_frames):
-            fig = visualize_compilation_step(
-                debug, arch_data, frame=f,
-                figsize=_anim_figsize, show_circuit=show_circuit,
-            )
-            buf = io.BytesIO()
-            fig.savefig(buf, format="png", dpi=dpi)
-            plt.close(fig)          # <── release figure memory immediately
-            buf.seek(0)
-            pil_frames.append(Image.open(buf).copy())
-            buf.close()
-            if verbose and (f + 1) % 10 == 0:
-                print(f"  rendered {f + 1}/{n_frames} frames...")
 
-        duration_ms = int(1000 / fps)
-        pil_frames[0].save(
-            path,
-            save_all=True,
-            append_images=pil_frames[1:],
-            duration=duration_ms,
-            loop=0,
-            optimize=True,
-        )
+        elif path_lower.endswith(".gif"):
+            # Try ffmpeg first (better palette → smaller, higher quality GIF)
+            ffmpeg_ok = False
+            try:
+                concat_file = os.path.join(tmpdir, "concat.txt")
+                with open(concat_file, "w") as f:
+                    for fpath, dur_ms in zip(frame_paths, frame_durations_ms):
+                        f.write(f"file '{fpath}'\n")
+                        f.write(f"duration {dur_ms / 1000:.6f}\n")
+                palette_path = os.path.join(tmpdir, "palette.png")
+                subprocess.run(
+                    ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                     "-i", concat_file,
+                     "-vf", "palettegen=stats_mode=diff", palette_path],
+                    check=True, capture_output=True,
+                )
+                subprocess.run(
+                    ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                     "-i", concat_file, "-i", palette_path,
+                     "-filter_complex", "paletteuse=dither=bayer",
+                     path],
+                    check=True, capture_output=True,
+                )
+                ffmpeg_ok = True
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                pass
+
+            if not ffmpeg_ok:
+                # Fallback: accumulate PIL images (each is much smaller than a figure)
+                try:
+                    from PIL import Image
+                except ImportError as e:
+                    msg = "pillow is required for GIF output: pip install pillow"
+                    raise ImportError(msg) from e
+                pil_frames = [Image.open(fp).copy() for fp in frame_paths]
+                pil_frames[0].save(
+                    path,
+                    save_all=True,
+                    append_images=pil_frames[1:],
+                    duration=frame_durations_ms,
+                    loop=0,
+                    optimize=True,
+                )
+        else:
+            msg = f"Unsupported output format: {path!r} (expected .gif, .mp4, or .webm)"
+            raise ValueError(msg)
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
     if verbose:
-        import os
         size_mb = os.path.getsize(path) / 1e6
-        print(f"Saved {path}  ({n_frames} frames @ {fps} fps, {size_mb:.1f} MB)")
+        print(f"Saved {path}  ({n_expanded} frames, {size_mb:.1f} MB)")
 
 
 # ── movie mode (time-proportional animation) ─────────────────────────────────
@@ -1517,18 +1869,16 @@ def animate_compilation_movie(
     frame_times = _compute_frame_times(debug, arch_data, slm_map)
 
     # Build expanded frame list.
-    # Each entry: (phase, logical_frame, t)
-    #   phase: "store_move", "1q", "load_move", "cz", "static"
-    #   t: interpolation parameter [0, 1] for movement sub-frames
+    # Each entry: (phase, logical_frame, t, group_idx)
     Phase = str  # type alias
-    expanded: list[tuple[Phase, int, float]] = []
+    expanded: list[tuple[Phase, int, float, int]] = []
 
     for f in range(n_logical):
         is_ent = (f % 2 == 1)
         layer_idx = f // 2
 
         if is_ent:
-            expanded.append(("cz", f, 1.0))
+            expanded.append(("cz", f, 1.0, 0))
         else:
             has_store = (f > 0 and (f - 1) < len(routing) and
                          any(_qubit_xy(slm_map, placements[f - 1][q]) !=
@@ -1542,21 +1892,23 @@ def animate_compilation_movie(
                             for group in routing[f] for q in group))
 
             if has_store:
-                for s in range(sub_frames_per_move):
-                    t = s / max(sub_frames_per_move - 1, 1)
-                    expanded.append(("store_move", f, t))
+                for g_idx in range(len(routing[f - 1])):
+                    for s in range(sub_frames_per_move):
+                        t = s / max(sub_frames_per_move - 1, 1)
+                        expanded.append(("store_move", f, t, g_idx))
 
             if has_1q:
-                expanded.append(("1q", f, 1.0))
+                expanded.append(("1q", f, 1.0, 0))
 
             if has_load:
-                for s in range(sub_frames_per_move):
-                    t = s / max(sub_frames_per_move - 1, 1)
-                    expanded.append(("load_move", f, t))
+                for g_idx in range(len(routing[f])):
+                    for s in range(sub_frames_per_move):
+                        t = s / max(sub_frames_per_move - 1, 1)
+                        expanded.append(("load_move", f, t, g_idx))
 
             # If nothing happened, show one static frame
             if not has_store and not has_1q and not has_load:
-                expanded.append(("static", f, 1.0))
+                expanded.append(("static", f, 1.0, 0))
 
     n_expanded = len(expanded)
 
@@ -1573,12 +1925,13 @@ def animate_compilation_movie(
         ax_timeline = None
         ax_info = None
 
+    _xmin, _xmax, _ymin, _ymax = _arch_axis_limits(arch_data)
+
     def _update(exp_idx: int) -> None:
-        phase, logical_frame, t = expanded[exp_idx]
+        phase, logical_frame, t, group_idx = expanded[exp_idx]
 
         ax.cla()
-        ax.set_aspect("equal")
-        ax.invert_yaxis()
+        ax.set_aspect("equal", adjustable="box")
         ax.set_xlabel("")
         ax.set_ylabel("y (\u00b5m)")
         ax.grid(visible=True, linestyle=":", linewidth=0.4,
@@ -1589,12 +1942,12 @@ def animate_compilation_movie(
             # We render using placement[f-1] → placement[f]
             _render_directional_interpolation(
                 ax, arch_data, slm_map, debug, logical_frame,
-                direction="store", t=t)
+                direction="store", t=t, group_idx=group_idx)
         elif phase == "load_move":
             # Interpolate movement from current storage → next entanglement
             _render_directional_interpolation(
                 ax, arch_data, slm_map, debug, logical_frame,
-                direction="load", t=t)
+                direction="load", t=t, group_idx=group_idx)
         elif phase == "cz":
             _render_frame(ax, arch_data, slm_map, debug, logical_frame)
         elif phase == "1q":
@@ -1602,9 +1955,11 @@ def animate_compilation_movie(
         else:
             _render_frame(ax, arch_data, slm_map, debug, logical_frame)
 
+        ax.set_xlim(_xmin, _xmax)
+        ax.set_ylim(_ymax, _ymin)   # fixed limits after render
+
         is_ent = (logical_frame % 2 == 1) and (logical_frame // 2 < n_layers)
         _build_legends(ax, debug, is_ent)
-        ax.autoscale_view()
 
         if ax_timeline is not None:
             ax_timeline.cla()
@@ -1640,6 +1995,7 @@ def _render_directional_interpolation(
     logical_frame: int,
     direction: str,
     t: float,
+    group_idx: int = 0,
 ) -> None:
     """Render a smooth shuttle movement for the *movie* animation.
 
@@ -1647,6 +2003,7 @@ def _render_directional_interpolation(
         direction: ``"store"`` (previous ent. → current storage) or
                    ``"load"`` (current storage → next ent.).
         t: Interpolation parameter in [0, 1].
+        group_idx: The routing group currently being interpolated.
     """
     n_qubits: int = debug["n_qubits"]
     placements = debug["placement"]
@@ -1673,24 +2030,57 @@ def _render_directional_interpolation(
     src = placements[src_idx] if src_idx >= 0 and src_idx < len(placements) else placements[0]
     dst = placements[dst_idx] if dst_idx < len(placements) else src
 
-    moving: set[int] = set()
+    current_group_moving = set()
+    moved_qubits = set()
+    
     if 0 <= route_idx < len(routing):
-        for group in routing[route_idx]:
-            for q in group:
+        if group_idx < len(routing[route_idx]):
+            for q in routing[route_idx][group_idx]:
                 if _qubit_xy(slm_map, src[q]) != _qubit_xy(slm_map, dst[q]):
-                    moving.add(q)
+                    current_group_moving.add(q)
+        for g in range(group_idx):
+            if g < len(routing[route_idx]):
+                for q in routing[route_idx][g]:
+                    if _qubit_xy(slm_map, src[q]) != _qubit_xy(slm_map, dst[q]):
+                        moved_qubits.add(q)
 
     _draw_background(ax, arch, laser_active=False)
 
+    # Compute current (interpolated) position for every qubit.
+    cur_xy: dict[int, tuple[float, float]] = {}
     for q in range(n_qubits):
         x0, y0 = _qubit_xy(slm_map, src[q])
-        if q in moving:
+        x1, y1 = _qubit_xy(slm_map, dst[q])
+        if q in current_group_moving:
+            cur_xy[q] = (x0 + (x1 - x0) * t_smooth, y0 + (y1 - y0) * t_smooth)
+        elif q in moved_qubits:
+            cur_xy[q] = (x1, y1)
+        else:
+            cur_xy[q] = (x0, y0)
+
+    # ── Routing-group connectors ───────────────────────────────────────────
+    # Qubits in the same routing group are shuttled together as a unit in
+    # the AOD (same row or column).  Draw a thin line between them so the
+    # compiler's grouping decision is visible during movement.
+    if 0 <= route_idx < len(routing) and group_idx < len(routing[route_idx]):
+        group = routing[route_idx][group_idx]
+        moving_in_group = [q for q in group if q in current_group_moving]
+        if len(moving_in_group) >= 2:
+            gxs = [cur_xy[q][0] for q in moving_in_group]
+            gys = [cur_xy[q][1] for q in moving_in_group]
+            ax.plot(gxs, gys, "-", color="#555555",
+                    linewidth=0.7, alpha=0.35, zorder=4,
+                    solid_capstyle="round")
+
+    for q in range(n_qubits):
+        x, y = cur_xy[q]
+        x0, y0 = _qubit_xy(slm_map, src[q])
+        if q in current_group_moving:
             x1, y1 = _qubit_xy(slm_map, dst[q])
-            x = x0 + (x1 - x0) * t_smooth
-            y = y0 + (y1 - y0) * t_smooth
-            # Trail
-            ax.plot([x0, x], [y0, y], "-", color=_qubit_color(q),
-                    linewidth=1.2, alpha=0.25, zorder=4)
+            # Trail from source to current position
+            # Trail from source to current position
+            ax.plot([x0, x], [y0, y], "-", color=_qubit_color(q), linewidth=1.2, alpha=0.35, zorder=4)
+                    
             # Ghost at source
             if t_smooth < 0.85:
                 ax.scatter([x0], [y0], s=40, c=[_qubit_color(q)],
@@ -1700,13 +2090,6 @@ def _render_directional_interpolation(
                 ax.scatter([x1], [y1], s=50, facecolors="none",
                            edgecolors=_qubit_color(q), linewidths=0.5,
                            alpha=0.25, zorder=3, linestyles="dotted")
-        else:
-            # Non-moving atoms: show at their position in the destination frame
-            # (they stay put, but their "current" placement depends on direction)
-            if direction == "store":
-                x, y = _qubit_xy(slm_map, dst[q])
-            else:
-                x, y = x0, y0
 
         ax.scatter([x], [y], s=80, c=[_qubit_color(q)], zorder=8,
                    linewidths=0.8, edgecolors="white")
@@ -1714,10 +2097,55 @@ def _render_directional_interpolation(
                 color="white", fontweight="bold", zorder=9)
 
     layer_idx = logical_frame // 2
+    moving = set(
+        q for g in routing[route_idx] for q in g
+        if _qubit_xy(slm_map, src[q]) != _qubit_xy(slm_map, dst[q])
+    ) if 0 <= route_idx < len(routing) else set()
     n_moving = len(moving)
+    n_groups = sum(
+        1 for g in routing[route_idx] if any(q in moving for q in g)
+    ) if 0 <= route_idx < len(routing) else 0
+    group_note = f", {n_groups} group{'s' if n_groups != 1 else ''}" if n_groups else ""
     ax.set_title(
         f"Shuttling \u2014 {label} \u2014 Layer {layer_idx} \u2014 "
-        f"{n_moving} atom{'s' if n_moving != 1 else ''} "
+        f"{n_moving} atom{'s' if n_moving != 1 else ''}{group_note} "
         f"({t_smooth * 100:.0f}%)\n"
         f"(frame {logical_frame}/{2 * n_layers})",
         fontsize=9)
+
+def _render_ops_frame(ax, arch_data, slm_map, debug, frame_data):
+    current_pos = frame_data["current_pos"]
+    active_qubits = frame_data["active_qubits"]
+    active_load = frame_data["active_load"]
+    phase = frame_data["phase"]
+    t = frame_data.get("t", 1.0)
+    
+    _draw_background(ax, arch_data, laser_active=False)
+    
+    n_qubits = debug.get("n_qubits", 0)
+    
+    if phase == "move":
+        # Draw trails
+        start_pos = frame_data["start_pos"]
+        end_pos = frame_data["end_pos"]
+        for q in active_qubits:
+            x0, y0 = start_pos[q]
+            x, y = current_pos[q]
+            x1, y1 = end_pos[q]
+            ax.plot([x0, x], [y0, y], "-", color=_qubit_color(q), linewidth=1.2, alpha=0.35, zorder=4)
+            if t < 0.85:
+                ax.scatter([x0], [y0], s=40, c=[_qubit_color(q)], alpha=0.12, zorder=3, linewidths=0)
+            if t < 0.9:
+                ax.scatter([x1], [y1], s=50, facecolors="none", edgecolors=_qubit_color(q), linewidths=0.5, alpha=0.25, zorder=3, linestyles="dotted")
+                
+    for q in range(n_qubits):
+        x, y = current_pos[q]
+        if q in active_load:
+            ax.scatter([x], [y], s=250, facecolors='none', edgecolors='#000000', linewidths=1.2, alpha=0.4, zorder=7)
+        ax.scatter([x], [y], s=80, c=[_qubit_color(q)], zorder=8, linewidths=0.8, edgecolors="white")
+        ax.text(x, y, str(q), fontsize=5, ha="center", va="center", color="white", fontweight="bold", zorder=9)
+            
+    header_title = f"Operations step: {phase.upper()} "
+    if phase == "move":
+        header_title += f"({t * 100:.0f}%)"
+    ax.set_title(header_title, fontsize=9)
