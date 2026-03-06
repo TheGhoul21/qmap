@@ -1281,6 +1281,118 @@ def animate_compilation(
     return anim
 
 
+def save_compilation_animation(
+    debug: dict[str, Any],
+    arch: str | dict[str, Any],
+    path: str,
+    fps: float = 2.0,
+    figsize: tuple[float, float] | None = None,
+    dpi: int = 80,
+    max_frames: int | None = None,
+    show_circuit: bool = True,
+    verbose: bool = True,
+) -> None:
+    """Save a compilation animation directly to a GIF or MP4 file.
+
+    Unlike :func:`animate_compilation` (which uses FuncAnimation and keeps
+    the entire animation in memory), this function renders each frame
+    independently with :func:`visualize_compilation_step`, closes the
+    matplotlib figure immediately, and writes only the compressed pixel data.
+    Memory usage stays roughly constant regardless of frame count.
+
+    For GIF output (path ending in ``.gif``) ``pillow`` is required.
+    For MP4 output (path ending in ``.mp4``) ``ffmpeg`` is required.
+
+    Recommended parameters for large circuits:
+      - ``figsize=(12, 6.75)`` — half-resolution (1280×720 at 96 dpi)
+      - ``dpi=80`` — reduces per-frame pixel count vs the 1920×1080 default
+      - ``max_frames=50`` — cap long animations during exploration
+
+    Args:
+        debug: The dictionary returned by ``compiler.debug_info()``.
+        arch: Architecture JSON string or dict.
+        path: Output file path. Extension determines format (``.gif``/``.mp4``).
+        fps: Frames per second.
+        figsize: Figure size in inches. Defaults to ``(12, 6.75)`` (≈1280×720).
+        dpi: Dots per inch when rasterising each frame.
+        max_frames: If set, stop after this many frames.
+        show_circuit: Passed through to :func:`visualize_compilation_step`.
+        verbose: Print progress every 10 frames.
+    """
+    try:
+        import io
+        import matplotlib.pyplot as plt
+        from PIL import Image
+    except ImportError as e:
+        msg = "pillow and matplotlib are required: pip install pillow matplotlib"
+        raise ImportError(msg) from e
+
+    arch_data: dict[str, Any] = json.loads(arch) if isinstance(arch, str) else dict(arch)
+    n_layers = debug["n_layers"]
+    n_frames = 2 * n_layers + 1
+    if max_frames is not None:
+        n_frames = min(n_frames, max_frames)
+
+    _anim_figsize = figsize or (12.0, 6.75)   # 1280×~540 at 80dpi — much smaller than 1920×1080
+    path_lower = path.lower()
+    use_ffmpeg = path_lower.endswith(".mp4") or path_lower.endswith(".webm")
+
+    if use_ffmpeg:
+        import subprocess, tempfile, os
+        tmpdir = tempfile.mkdtemp(prefix="qmap_anim_")
+        try:
+            for f in range(n_frames):
+                fig = visualize_compilation_step(
+                    debug, arch_data, frame=f,
+                    figsize=_anim_figsize, show_circuit=show_circuit,
+                )
+                fig.savefig(f"{tmpdir}/frame_{f:05d}.png", dpi=dpi)
+                plt.close(fig)
+                if verbose and (f + 1) % 10 == 0:
+                    print(f"  rendered {f + 1}/{n_frames} frames...")
+            cmd = [
+                "ffmpeg", "-y", "-r", str(fps),
+                "-i", f"{tmpdir}/frame_%05d.png",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", path,
+            ]
+            subprocess.run(cmd, check=True, capture_output=not verbose)
+        finally:
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+    else:
+        # GIF: render each frame → PIL image → close figure → accumulate PIL images.
+        # PIL images are ~10-50× smaller in memory than the matplotlib figure object.
+        pil_frames: list[Image.Image] = []
+        for f in range(n_frames):
+            fig = visualize_compilation_step(
+                debug, arch_data, frame=f,
+                figsize=_anim_figsize, show_circuit=show_circuit,
+            )
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", dpi=dpi)
+            plt.close(fig)          # <── release figure memory immediately
+            buf.seek(0)
+            pil_frames.append(Image.open(buf).copy())
+            buf.close()
+            if verbose and (f + 1) % 10 == 0:
+                print(f"  rendered {f + 1}/{n_frames} frames...")
+
+        duration_ms = int(1000 / fps)
+        pil_frames[0].save(
+            path,
+            save_all=True,
+            append_images=pil_frames[1:],
+            duration=duration_ms,
+            loop=0,
+            optimize=True,
+        )
+
+    if verbose:
+        import os
+        size_mb = os.path.getsize(path) / 1e6
+        print(f"Saved {path}  ({n_frames} frames @ {fps} fps, {size_mb:.1f} MB)")
+
+
 # ── movie mode (time-proportional animation) ─────────────────────────────────
 
 def _compute_frame_times(

@@ -15,6 +15,8 @@ from .visualize_na_architecture import visualize_architecture
 from .visualize_na_compilation import (
     animate_compilation,
     animate_compilation_movie,
+    compilation_guard,
+    save_compilation_animation,
     visualize_compilation_step,
 )
 from .visualize_search_graph import SearchNode, visualize_search_graph
@@ -24,6 +26,8 @@ __all__ = [
     "SearchVisualizer",
     "animate_compilation",
     "animate_compilation_movie",
+    "compilation_guard",
+    "save_compilation_animation",
     "visualize_architecture",
     "visualize_compilation_step",
     "visualize_search_graph",
