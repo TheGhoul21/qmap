@@ -1137,19 +1137,18 @@ def visualize_compilation_step(
     #   Left column (78%):  atom view | gate schedule overview | timeline
     #   Right column (22%): legends + info panel
     if show_circuit and n_layers > 0:
-        fig = plt.figure(figsize=figsize or (19.2, 10.8))
+        fig = plt.figure(figsize=figsize or (19.2, 10.8), constrained_layout=True)
         gs = GridSpec(
             3, 2, figure=fig,
             height_ratios=[5.5, 1.6, 0.7],
             width_ratios=[4.5, 1],
-            hspace=0.30, wspace=0.05,
         )
         ax = fig.add_subplot(gs[0, 0])
         ax_overview = fig.add_subplot(gs[1, 0])
         ax_timeline = fig.add_subplot(gs[2, 0])
         ax_right = fig.add_subplot(gs[:, 1])   # full right column: legends + info
     else:
-        fig, ax = plt.subplots(figsize=figsize or (14, 9))
+        fig, ax = plt.subplots(figsize=figsize or (14, 9), constrained_layout=True)
         ax_overview = None
         ax_timeline = None
         ax_right = None
@@ -1174,7 +1173,6 @@ def visualize_compilation_step(
     if ax_timeline is not None:
         _draw_circuit_timeline(ax_timeline, debug, frame)
 
-    fig.tight_layout(pad=0.5)
     return fig
 
 
@@ -1236,19 +1234,18 @@ def animate_compilation(
         n_frames = min(n_frames, max_frames)
 
     if show_circuit and n_layers > 0:
-        fig = plt.figure(figsize=figsize or (19.2, 10.8))
+        fig = plt.figure(figsize=figsize or (19.2, 10.8), constrained_layout=True)
         gs = GridSpec(
             3, 2, figure=fig,
             height_ratios=[5.5, 1.6, 0.7],
             width_ratios=[4.5, 1],
-            hspace=0.30, wspace=0.05,
         )
         ax = fig.add_subplot(gs[0, 0])
         ax_overview = fig.add_subplot(gs[1, 0])
         ax_timeline = fig.add_subplot(gs[2, 0])
         ax_right = fig.add_subplot(gs[:, 1])
     else:
-        fig, ax = plt.subplots(figsize=figsize or (14, 9))
+        fig, ax = plt.subplots(figsize=figsize or (14, 9), constrained_layout=True)
         ax_overview = None
         ax_timeline = None
         ax_right = None
@@ -1281,7 +1278,6 @@ def animate_compilation(
     anim = animation.FuncAnimation(fig, _update, frames=n_frames,
                                    interval=interval, repeat=repeat,
                                    blit=False)
-    fig.tight_layout(pad=0.5)
     return anim
 
 
