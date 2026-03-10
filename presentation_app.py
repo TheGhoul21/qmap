@@ -330,7 +330,7 @@ def render_realtime_canvas(debug_json: str, arch_json: str,
   function addZone(z, type) {{
     zones.push({{ type, x:z.offset[0], y:z.offset[1], w:z.dimension[0], h:z.dimension[1] }});
     z.slms.forEach(s => {{
-      slmMap[s.id] = {{ x:s.location[0], y:s.location[1], sx:s.site_separation[0], sy:s.site_separation[1], r:s.r, c:s.c }};
+      slmMap[s.id] = {{ x:s.location[0], y:s.location[1], sx:s.site_separation[0], sy:s.site_separation[1], r:s.r, c:s.c, type }};
     }});
   }}
   (arch.storage_zones      || []).forEach(z => addZone(z, 'storage'));
@@ -516,11 +516,25 @@ def render_realtime_canvas(debug_json: str, arch_json: str,
     const nTrans = (debug.placement || []).length - 1;
     const paths = {{}};
     let transIdx = 0;
+    let czCount = 0;
     const qubitPath = {{}};
-    let roundComplete = false; // true after every store empties qubitPath
+    let roundComplete = false; 
+
     for (const op of ops) {{
       if (op.type === 'load') {{
-        // A new round starts after a completed round (going-back → going-forward boundary)
+        const qi = op.qubits[0];
+        const p = debug.placement[transIdx];
+        if (p && p[qi]) {{
+          const [sid, row, col] = p[qi];
+          const isCurrentlyInEZ = slmMap[sid] && slmMap[sid].type === 'entanglement';
+          // If we are in a backward phase (odd transIdx) but load an atom from storage,
+          // we have started the forward phase for the next layer.
+          if ((transIdx % 2 === 1) && !isCurrentlyInEZ) {{
+            transIdx++;
+            roundComplete = false;
+          }}
+        }}
+        // Traditional round completion (store-driven)
         if (roundComplete && Object.keys(qubitPath).length === 0) {{
           transIdx++;
           roundComplete = false;
@@ -541,11 +555,11 @@ def render_realtime_canvas(debug_json: str, arch_json: str,
             delete qubitPath[qi];
           }}
         }}
-        // Mark round complete when all active paths have been stored
         if (Object.keys(qubitPath).length === 0) roundComplete = true;
       }} else if (op.type === 'cz') {{
-        // CZ always advances to the next transition; reset round tracking
-        transIdx++;
+        // CZ marks the end of a forward phase and the start of a backward phase
+        czCount++;
+        transIdx = 2 * czCount - 1;
         roundComplete = false;
       }}
     }}
@@ -553,6 +567,7 @@ def render_realtime_canvas(debug_json: str, arch_json: str,
     for (let i = 0; i < nTrans; i++) result.push(paths[i] || {{}});
     return result;
   }})();
+
 
   // ── Pre-build reuse annotations: reuseAnnotations[f0] = Set of qubit indices ──
   const reuseAnnotations = {{}};
