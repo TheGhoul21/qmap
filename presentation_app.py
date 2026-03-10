@@ -118,27 +118,19 @@ PRESETS: dict[str, Any] = {
         "description": "Catena di CNOT — mostra la decomposizione c-U → CZ",
         "builder": "cnot_chain",
         "n_qubits": 5,
-        "display_qasm": (
-            "OPENQASM 2.0;\ninclude \"qelib1.inc\";\nqreg q[5];\n"
-            "h q[0];\ncx q[0],q[1];\ncx q[1],q[2];\ncx q[2],q[3];\ncx q[3],q[4];\nh q[4];\n"
-        ),
     },
     "Teleportation-like (4q)": {
         "description": "Circuito con CNOT e porte miste → CZ basis",
         "builder": "teleport_like",
         "n_qubits": 4,
-        "display_qasm": (
-            "OPENQASM 2.0;\ninclude \"qelib1.inc\";\nqreg q[4];\n"
-            "h q[0];\ncx q[0],q[1];\ncx q[1],q[2];\nh q[2];\ncx q[2],q[3];\nh q[1];\ncx q[0],q[3];\n"
-        ),
     },
-    "Linear chain (8q)": {
-        "description": "8-qubit linear CZ chain",
+    "Linear CZ chain (8q)": {
+        "description": "Catena lineare di CZ — topologia 1D",
         "builder": "linear_chain",
         "n_qubits": 8,
     },
     "GHZ (6q)": {
-        "description": "GHZ state preparation",
+        "description": "GHZ state preparation — prepara lo stato (|0...0> + |1...1>) / sqrt(2)",
         "builder": "ghz",
         "n_qubits": 6,
     },
@@ -201,10 +193,12 @@ PRESETS: dict[str, Any] = {
 
 
 def _build_circuit(preset_name: str, preset: dict[str, Any], qasm_text: str):
-    """Return a QuantumComputation for the given preset/QASM."""
+    """Return a QuantumComputation (high-level logical circuit, before Qiskit transpile)."""
     import mqt.core.ir as ir
+    import math as _math
 
     b = preset["builder"]
+
     if b == "linear_chain":
         n = preset["n_qubits"]
         qc = ir.QuantumComputation(n)
@@ -212,19 +206,15 @@ def _build_circuit(preset_name: str, preset: dict[str, Any], qasm_text: str):
             qc.cz(i, i + 1)
         for i in range(n - 2):
             qc.cz(i, i + 2)
-        qc.h(0)
-        qc.h(n - 1)
-        return qc, n
+        return qc
 
     if b == "ghz":
         n = preset["n_qubits"]
         qc = ir.QuantumComputation(n)
         qc.h(0)
         for i in range(n - 1):
-            qc.cz(0, i + 1)
-        for i in range(n):
-            qc.h(i)
-        return qc, n
+            qc.cx(i, i + 1)
+        return qc
 
     if b == "qft":
         n = preset["n_qubits"]
@@ -232,55 +222,48 @@ def _build_circuit(preset_name: str, preset: dict[str, Any], qasm_text: str):
         for i in range(n):
             qc.h(i)
             for j in range(i + 1, n):
-                qc.cz(i, j)
-        return qc, n
+                qc.cp(_math.pi / (2 ** (j - i)), i, j)
+        for i in range(n // 2):
+            qc.swap(i, n - 1 - i)
+        return qc
 
     if b == "qpe":
         n = preset["n_qubits"]
         n_count = preset.get("counting_qubits", n - 1)
         if n_count >= n:
             raise ValueError("counting_qubits must be smaller than n_qubits")
-
         qc = ir.QuantumComputation(n)
         target = n_count
-
+        phi = _math.pi / 4  # T gate phase (eigenvalue e^{iπ/4} on |1>)
         qc.x(target)
-
         for q in range(n_count):
             qc.h(q)
-
         for k in range(n_count):
-            reps = 1 << k
-            for _ in range(reps):
-                qc.cz(k, target)
-
+            qc.cp(phi * (1 << k), k, target)
+        for i in range(n_count // 2):
+            qc.swap(i, n_count - 1 - i)
         for i in range(n_count - 1, -1, -1):
-            for j in range(i - 1, -1, -1):
-                qc.cz(j, i)
             qc.h(i)
-
-        return qc, n
+            for j in range(i - 1, -1, -1):
+                qc.cp(-_math.pi / (2 ** (i - j)), j, i)
+        return qc
 
     if b == "qaoa_ring":
         n = preset["n_qubits"]
         p_layers = preset.get("p_layers", 4)
+        gamma = _math.pi / 4   # fixed demo parameters
+        beta  = _math.pi / 8
         qc = ir.QuantumComputation(n)
-
+        for q in range(n):
+            qc.h(q)
         for _ in range(p_layers):
+            # Problem Hamiltonian: RZZ on ring edges (MaxCut on ring)
+            for i in range(n):
+                qc.rzz(2 * gamma, i, (i + 1) % n)
+            # Mixer Hamiltonian: RX on all qubits
             for q in range(n):
-                qc.h(q)
-
-            for i in range(0, n - 1, 2):
-                qc.cz(i, i + 1)
-
-            for i in range(1, n - 1, 2):
-                qc.cz(i, i + 1)
-            qc.cz(n - 1, 0)
-
-            for q in range(n):
-                qc.h(q)
-
-        return qc, n
+                qc.rx(2 * beta, q)
+        return qc
 
     if b == "dense_grid":
         n = preset["n_qubits"]
@@ -292,7 +275,7 @@ def _build_circuit(preset_name: str, preset: dict[str, Any], qasm_text: str):
             qc.cz(i, i + side)
         for i in range(n):
             qc.h(i)
-        return qc, n
+        return qc
 
     if b == "brickwork":
         n = preset["n_qubits"]
@@ -305,39 +288,32 @@ def _build_circuit(preset_name: str, preset: dict[str, Any], qasm_text: str):
                 qc.cz(i, i + 1)
             for i in range(n):
                 qc.h(i)
-        return qc, n
+        return qc
 
     if b == "cnot_chain":
-        # Compile with CZ (CNOT = H·CZ·H on target); display keeps CNOT QASM
         n = preset["n_qubits"]
         qc = ir.QuantumComputation(n)
         qc.h(0)
         for i in range(n - 1):
-            qc.h(i + 1)
-            qc.cz(i, i + 1)
-            qc.h(i + 1)
+            qc.cx(i, i + 1)
         qc.h(n - 1)
-        return qc, n
+        return qc
 
     if b == "teleport_like":
         n = preset["n_qubits"]
         qc = ir.QuantumComputation(n)
         qc.h(0)
-        # cx q[0],q[1]
-        qc.h(1); qc.cz(0, 1); qc.h(1)
-        # cx q[1],q[2]
-        qc.h(2); qc.cz(1, 2); qc.h(2)
+        qc.cx(0, 1)
+        qc.cx(1, 2)
         qc.h(2)
-        # cx q[2],q[3]
-        qc.h(3); qc.cz(2, 3); qc.h(3)
+        qc.cx(2, 3)
         qc.h(1)
-        # cx q[0],q[3]
-        qc.h(3); qc.cz(0, 3); qc.h(3)
-        return qc, n
+        qc.cx(0, 3)
+        return qc
 
     if b == "qasm":
         qc = ir.QuantumComputation.from_qasm_str(qasm_text)
-        return qc, qc.num_qubits
+        return qc
 
     raise ValueError(f"Unknown builder: {b}")
 
@@ -345,15 +321,44 @@ def _build_circuit(preset_name: str, preset: dict[str, Any], qasm_text: str):
 # ── compilation ────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def compile_circuit(preset_name: str, qasm_text: str, arch_json: str) -> dict[str, Any]:
-    """Compile and return debug_info dict. Cached by inputs."""
+    """Compile circuit: logical → Qiskit transpile → NA compiler. Returns debug_info + original_qasm."""
     import mqt.qmap.na.zoned as zoned
+    from mqt.core import load
+    from mqt.core.plugins.qiskit import mqt_to_qiskit
+    from qiskit import transpile, qasm2
 
     arch = zoned.ZonedNeutralAtomArchitecture.from_json_string(arch_json)
     preset = PRESETS[preset_name]
-    qc, _ = _build_circuit(preset_name, preset, qasm_text)
+    qc_logical = _build_circuit(preset_name, preset, qasm_text)
+
+    # Extract QASM of the logical (pre-transpile) circuit for display
+    try:
+        qk_logical = mqt_to_qiskit(qc_logical)
+        original_qasm = qasm2.dumps(qk_logical)
+    except Exception:
+        original_qasm = ""
+
+    # Transpile to NA-native gate set {H, P, CZ} using Qiskit.
+    # Two passes: the first decomposes all gates; the second eliminates any
+    # residual identity/trivial gates that survive optimization_level=3.
+    qk_logical_for_transpile = mqt_to_qiskit(qc_logical)
+    _t1 = transpile(qk_logical_for_transpile, basis_gates=["h", "p", "cz"], optimization_level=3)
+    transpiled_qk = transpile(_t1, basis_gates=["h", "p", "cz"], optimization_level=3)
+    qc_native = load(transpiled_qk)
+    # load() converts P(kπ/2) to named gates (S, Sdg, T, …) and may produce
+    # identity ('id') gates that the NA compiler can't handle.  Strip them.
+    import mqt.core.ir as _ir
+    _qasm_native = qc_native.qasm2_str()
+    if any(l.startswith("id ") for l in _qasm_native.splitlines()):
+        _qasm_fixed = "\n".join(
+            l for l in _qasm_native.splitlines() if not l.startswith("id ")
+        )
+        qc_native = _ir.QuantumComputation.from_qasm_str(_qasm_fixed)
+
     c = zoned.RoutingAwareCompiler(arch)
-    c.compile(qc)
-    return c.debug_info()
+    c.compile(qc_native)
+    di = c.debug_info()
+    return {"debug": di, "original_qasm": original_qasm, "n_qubits": di["n_qubits"]}
 
 
 # ── quantikz circuit rendering ────────────────────────────────────────────────
@@ -363,6 +368,28 @@ _GATE_MAP = {
     "rx": r"R_x", "ry": r"R_y", "rz": r"R_z",
     "u": "U", "u1": r"U_1", "u2": r"U_2", "u3": r"U_3",
 }
+
+
+def _cz_groups(pairs: list) -> list[list[tuple[int, int]]]:
+    """Split CZ pairs into groups where no two pairs have overlapping qubit ranges.
+
+    Two pairs (i1,j1) and (i2,j2) conflict when their index ranges overlap,
+    because quantikz draws a vertical line spanning all wires between the two
+    qubits — overlapping lines create visual chaos.  We greedily assign each
+    pair to the first existing group it doesn't conflict with.
+    """
+    groups: list[list[tuple[int, int]]] = []
+    for pair in pairs:
+        i, j = min(int(pair[0]), int(pair[1])), max(int(pair[0]), int(pair[1]))
+        placed = False
+        for group in groups:
+            if not any(max(i, gi) < min(j, gj) for gi, gj in group):
+                group.append((i, j))
+                placed = True
+                break
+        if not placed:
+            groups.append([(i, j)])
+    return groups
 
 
 def _build_quantikz_source(debug: dict) -> str:
@@ -385,17 +412,16 @@ def _build_quantikz_source(debug: dict) -> str:
                     col[q] = rf"\gate{{{name}}}"
             columns.append(col)
 
-        # CZ column (skip if empty)
+        # CZ columns — split pairs with overlapping qubit ranges into separate
+        # columns so that quantikz vertical lines never cross within a column.
         tq = tq_layers[layer] if layer < len(tq_layers) else []
         if tq:
-            col = {}
-            for pair in tq:
-                i, j = int(pair[0]), int(pair[1])
-                if i > j:
-                    i, j = j, i
-                col[i] = rf"\ctrl{{{j - i}}}"
-                col[j] = rf"\ctrl{{{i - j}}}"
-            columns.append(col)
+            for group in _cz_groups(tq):
+                col = {}
+                for i, j in group:
+                    col[i] = rf"\ctrl{{{j - i}}}"
+                    col[j] = rf"\ctrl{{{i - j}}}"
+                columns.append(col)
 
     rows = []
     for q in range(n):
@@ -406,17 +432,16 @@ def _build_quantikz_source(debug: dict) -> str:
         rows.append(" & ".join(cells))
 
     body = " \\\\\n".join(rows)
-    # scale down for wide circuits
-    scale = max(0.5, min(1.0, 12.0 / max(1, len(columns))))
+    # Shrink column sep for wide circuits instead of scalebox-ing the whole
+    # diagram: scalebox distorts text/symbols below readability threshold.
+    col_sep = max(0.10, min(0.35, 5.0 / max(1, len(columns))))
     return (
         r"\documentclass[border=4pt]{standalone}" + "\n"
         r"\usepackage{quantikz}" + "\n"
         r"\begin{document}" + "\n"
-        rf"\scalebox{{{scale:.2f}}}{{" + "\n"
-        r"\begin{quantikz}[column sep=0.35cm, row sep=0.45cm]" + "\n"
+        rf"\begin{{quantikz}}[column sep={col_sep:.2f}cm, row sep=0.45cm]" + "\n"
         f"{body}\n"
         r"\end{quantikz}" + "\n"
-        "}\n"
         r"\end{document}"
     )
 
@@ -445,6 +470,18 @@ def _parse_qasm_to_columns(qasm_str: str, n_qubits: int) -> list[dict[int, str]]
             elif name == "cz":
                 col[qi] = rf"\ctrl{{{d}}}"
                 col[qj] = rf"\ctrl{{{-d}}}"
+            elif name == "swap":
+                col[qi] = rf"\swap{{{d}}}"
+                col[qj] = r"\targX{}"
+            elif name in ("cp", "crz", "cu1"):
+                col[qi] = rf"\ctrl{{{d}}}"
+                col[qj] = rf"\gate{{P}}"
+            elif name == "rzz":
+                col[qi] = rf"\gate{{ZZ}}"
+                col[qj] = rf"\gate{{ZZ}}"
+            elif name == "rxx":
+                col[qi] = rf"\gate{{XX}}"
+                col[qj] = rf"\gate{{XX}}"
             elif name.startswith("c") and len(name) > 1:
                 inner = _GATE_MAP.get(name[1:], name[1:].upper())
                 col[qi] = rf"\ctrl{{{d}}}"
@@ -486,7 +523,6 @@ def render_original_circuit_png(original_qasm: str, n_qubits: int) -> bytes | No
     if not columns:
         return None
 
-    scale = max(0.4, min(1.0, 12.0 / max(1, len(columns))))
     rows = []
     for q in range(n):
         cells = [rf"\lstick{{$q_{{{q}}}$}}"]
@@ -495,15 +531,14 @@ def render_original_circuit_png(original_qasm: str, n_qubits: int) -> bytes | No
         cells.append(r"\qw")
         rows.append(" & ".join(cells))
     body = " \\\\\n".join(rows)
+    col_sep = max(0.10, min(0.35, 5.0 / max(1, len(columns))))
     latex_src = (
         r"\documentclass[border=4pt]{standalone}" + "\n"
         r"\usepackage{quantikz}" + "\n"
         r"\begin{document}" + "\n"
-        rf"\scalebox{{{scale:.2f}}}{{" + "\n"
-        r"\begin{quantikz}[column sep=0.35cm, row sep=0.45cm]" + "\n"
+        rf"\begin{{quantikz}}[column sep={col_sep:.2f}cm, row sep=0.45cm]" + "\n"
         f"{body}\n"
         r"\end{quantikz}" + "\n"
-        "}\n"
         r"\end{document}"
     )
 
@@ -524,13 +559,16 @@ def render_original_circuit_png(original_qasm: str, n_qubits: int) -> bytes | No
              "-background", "white", "-alpha", "remove", "-alpha", "off", png],
             check=True, capture_output=True, timeout=30,
         )
-        with open(png, "rb") as f:
-            return f.read()
+        from PIL import Image
+        img = Image.open(png).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="png")
+        return buf.getvalue()
 
 
 @st.cache_data(show_spinner=False)
 def render_circuit_png(debug_json: str) -> bytes:
-    """Compile the quantikz circuit to PNG via pdflatex + magick."""
+    """Render the compiled circuit as PNG via quantikz (pdflatex + magick)."""
     import os
     import subprocess
     import tempfile
@@ -559,8 +597,13 @@ def render_circuit_png(debug_json: str) -> bytes:
             check=True, capture_output=True, timeout=30,
         )
 
-        with open(png, "rb") as f:
-            return f.read()
+        # ImageMagick+Ghostscript can produce 16-bit grayscale PNGs which
+        # Streamlit cannot display. Normalise to 8-bit RGB before returning.
+        from PIL import Image
+        img = Image.open(png).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="png")
+        return buf.getvalue()
 
 
 # ── static frame rendering ────────────────────────────────────────────────────
@@ -1002,30 +1045,16 @@ def main() -> None:
             st.session_state["autoplay"] = False
             with st.spinner("Compilazione in corso..."):
                 try:
-                    di = compile_circuit(preset_name, qasm_text, DEFAULT_ARCH_JSON)
+                    result = compile_circuit(preset_name, qasm_text, DEFAULT_ARCH_JSON)
+                    di = result["debug"]
                     st.session_state["debug_info"] = di
                     st.session_state["debug_json"] = json.dumps(di)
                     st.session_state["compiled"] = True
                     st.session_state["n_layers"] = di["n_layers"]
                     st.session_state["total_frames"] = 2 * di["n_layers"] + 1
+                    st.session_state["original_qasm"] = result["original_qasm"]
+                    st.session_state["original_n_qubits"] = result["n_qubits"]
                     st.success(f"Compilato: {di['n_layers']} layer, {di['n_qubits']} qubit")
-                    # Store original (pre-decomposition) QASM for display
-                    _display_qasm = PRESETS[preset_name].get("display_qasm", "")
-                    if not _display_qasm:
-                        # For presets without explicit display_qasm, extract from compiled qc
-                        try:
-                            _qc, _ = _build_circuit(preset_name, PRESETS[preset_name], qasm_text)
-                            for _m in ("qasm2_str", "qasm_str"):
-                                try:
-                                    _display_qasm = getattr(_qc, _m)()
-                                    if _display_qasm:
-                                        break
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                    st.session_state["original_qasm"] = _display_qasm
-                    st.session_state["original_n_qubits"] = di["n_qubits"]
                 except Exception as exc:
                     st.error(f"Errore:\n```\n{exc}\n```")
 
