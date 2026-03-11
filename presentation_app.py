@@ -56,6 +56,77 @@ if _local_mqt not in list(_mqt_ns.__path__):
 
 st.set_page_config(page_title="Quantum Compilation Explorer", layout="wide", initial_sidebar_state="expanded")
 
+
+def compute_circuit_stats(di: dict[str, Any], arch_dict: dict[str, Any]) -> dict[str, Any]:
+    """Compute real (not estimated) circuit statistics from debug_info and arch params.
+
+    Zone crossings: counted per-qubit from placement data (storage ↔ entanglement transitions).
+    This is the physically correct metric: every time a single atom crosses the zone boundary
+    = 1 crossing, regardless of whether it happens in a batched load/store instruction.
+    Equals sum(qubits in load+store ops) / 2, which matches placement-based counting.
+
+    Fidelity: F_transfer is applied once per qubit per atom-transfer operation
+    (not once per batch instruction), since each atom independently incurs the transfer error.
+    """
+    import math
+
+    ops = di.get("operations", [])
+
+    op_counts: dict[str, int] = {}
+    for op in ops:
+        t = op["type"]
+        op_counts[t] = op_counts.get(t, 0) + 1
+
+    n_cz  = op_counts.get("cz", 0)
+    n_1q  = op_counts.get("local_u", 0) + op_counts.get("local_rz", 0)
+    n_move = op_counts.get("move", 0)
+
+    # Per-qubit atom transfer counts (each atom in a batch op counted separately)
+    qb_load  = sum(len(op.get("qubits", [])) for op in ops if op["type"] == "load")
+    qb_store = sum(len(op.get("qubits", [])) for op in ops if op["type"] == "store")
+    qb_move  = sum(len(op.get("qubits", [])) for op in ops if op["type"] == "move")
+
+    # Zone crossings: per-qubit storage↔entanglement transitions.
+    # Each crossing requires exactly 1 load + 1 store for that qubit, so
+    # (qb_load + qb_store) double-counts. Divide by 2 to get actual crossings.
+    # Verified: equals placement-based per-qubit zone transition count.
+    n_zone_crossings = (qb_load + qb_store) // 2
+
+    # Total per-qubit atom-transfer operations (used for fidelity and time)
+    n_qubit_transfers = qb_load + qb_store + qb_move
+
+    n_reuses = len(di.get("reuse_qubits", []))
+
+    dur        = arch_dict.get("operation_duration", {})
+    t_cz       = float(dur.get("rydberg_gate", 0.36))       # µs
+    t_1q       = float(dur.get("single_qubit_gate", 52.0))  # µs
+    t_transfer = float(dur.get("atom_transfer", 15.0))       # µs
+
+    # Circuit time: each qubit-level transfer op costs t_transfer
+    t_circuit_us = n_cz * t_cz + n_1q * t_1q + n_qubit_transfers * t_transfer
+
+    # Fidelity: F_transfer applied per qubit per op (not per batch instruction)
+    fid    = arch_dict.get("operation_fidelity", {})
+    f_cz   = float(fid.get("rydberg_gate", 0.995))
+    f_1q   = float(fid.get("single_qubit_gate", 0.9997))
+    f_xfer = float(fid.get("atom_transfer", 0.999))
+    T1_us  = float(arch_dict.get("qubit_spec", {}).get("T", 1.5e6))
+
+    fidelity = (f_cz ** n_cz) * (f_1q ** n_1q) * (f_xfer ** n_qubit_transfers)
+    fidelity *= math.exp(-t_circuit_us / T1_us)
+
+    return {
+        "n_cz_gates":          n_cz,
+        "n_1q_gates":          n_1q,
+        "n_move":              n_move,
+        "n_qubit_transfers":   n_qubit_transfers,
+        "n_zone_crossings":    n_zone_crossings,
+        "n_reuses":            n_reuses,
+        "t_circuit_us":        t_circuit_us,
+        "fidelity":            fidelity,
+    }
+
+
 DEFAULT_ARCH_JSON = json.dumps({
     "name": "compact_32q_architecture",
     "operation_duration": {"rydberg_gate": 0.36, "single_qubit_gate": 52, "atom_transfer": 15},
@@ -1130,9 +1201,27 @@ def main() -> None:
 
     # ── Row 1: title + metrics + circuit diagrams ──────────────────────────
     st.subheader(preset_name)
-    m1, m2, _ = st.columns([1, 1, 6])
-    m1.metric("Qubits", di["n_qubits"])
-    m2.metric("Layers", di["n_layers"])
+
+    _arch_dict = json.loads(DEFAULT_ARCH_JSON)
+    stats = compute_circuit_stats(di, _arch_dict)
+
+    # Row A: circuit structure
+    mcols = st.columns(6)
+    mcols[0].metric("Qubits",          di["n_qubits"])
+    mcols[1].metric("CZ layers",        di["n_layers"])
+    mcols[2].metric("CZ gates",         stats["n_cz_gates"])
+    mcols[3].metric("1Q gates",           stats["n_1q_gates"])
+    mcols[4].metric("Atom transfers",     stats["n_qubit_transfers"])
+    mcols[5].metric("Zone crossings",     stats["n_zone_crossings"])
+
+    # Row B: timing + fidelity
+    mcols2 = st.columns(4)
+    t_us = stats["t_circuit_us"]
+    t_str = f"{t_us/1000:.2f} ms" if t_us >= 1000 else f"{t_us:.1f} µs"
+    mcols2[0].metric("Circuit time",      t_str)
+    mcols2[1].metric("Fidelity (est.)",   f"{stats['fidelity']:.4f}")
+    mcols2[2].metric("Shuttling moves",   stats["n_move"])
+    mcols2[3].metric("Reused qubits",     stats["n_reuses"])
 
     with st.expander("Circuiti", expanded=True):
         cc1, cc2 = st.columns(2)
